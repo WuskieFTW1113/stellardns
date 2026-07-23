@@ -12,6 +12,6 @@
   "license": "MIT",
   "engines": { "node": ">=18" },
   "dependencies": { "dns-packet": "^5.6.1" },
-  "repository": { "type": "git", "url": "git+https://github.com/YOURNAME/stellardns.git" },
+  "repository": { "type": "git", "url": "git+https://github.com/WuskieFTW1113/stellardns.git" },
   "files": ["server.js", "public/", "systemd/", "ha/", "config.example.json"]
 }
