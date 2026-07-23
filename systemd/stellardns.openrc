@@ -1,0 +1,8 @@
+#!/sbin/openrc-run
+name="stellardns"
+command="/usr/bin/node"
+command_args="--max-old-space-size=6144 /opt/stellardns/server.js"
+command_background="yes"
+pidfile="/run/stellardns.pid"
+directory="/opt/stellardns"
+depend() { need net; }

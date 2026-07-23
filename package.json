@@ -1,0 +1,17 @@
+{
+  "name": "stellardns",
+  "version": "19.0.0",
+  "description": "A fast, gaming-oriented DNS server with LANCache rewrites, blocklists, DoT/DoH, and a web console",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "bin": { "stellardns": "server.js" },
+  "keywords": ["dns", "dns-server", "lancache", "adblock", "doh", "dot", "resolver", "homelab", "gaming"],
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "dependencies": { "dns-packet": "^5.6.1" },
+  "repository": { "type": "git", "url": "git+https://github.com/YOURNAME/stellardns.git" },
+  "files": ["server.js", "public/", "systemd/", "ha/", "config.example.json"]
+}

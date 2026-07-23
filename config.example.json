@@ -1,0 +1,91 @@
+{
+  "dns": {
+    "host": "0.0.0.0",
+    "host6": "::",
+    "port": 53,
+    "tcp": true,
+    "ednsUdpSize": 1232
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 5380,
+    "apiToken": ""
+  },
+  "upstreams": [
+    {
+      "name": "cloudflare",
+      "address": "1.1.1.1",
+      "port": 53
+    },
+    {
+      "name": "quad9",
+      "address": "9.9.9.9",
+      "port": 53
+    }
+  ],
+  "race": false,
+  "ecs": false,
+  "ecsPrefixV4": 24,
+  "ecsPrefixV6": 56,
+  "qnameMinimization": true,
+  "happyEyeballs": false,
+  "filterAAAA": false,
+  "workers": 0,
+  "dnssec": "passthrough",
+  "dnssecStrictDomains": [],
+  "rebindingProtection": true,
+  "rebindingAllow": [],
+  "cache": {
+    "maxEntries": 150000,
+    "maxHeapMB": 512,
+    "minTtl": 5,
+    "maxTtl": 86400,
+    "negMaxTtl": 900,
+    "serveStale": true,
+    "serveStaleMaxAge": 259200,
+    "prefetch": true,
+    "prefetchWindow": 10,
+    "snapshotIntervalSec": 300
+  },
+  "circuit": {
+    "windowSize": 20,
+    "failThreshold": 0.5,
+    "probeIntervalMs": 3000
+  },
+  "timeoutMs": {
+    "min": 250,
+    "max": 3000,
+    "initial": 800
+  },
+  "log": {
+    "ringSize": 2000,
+    "file": true,
+    "maxFileBytes": 52428800,
+    "keepFiles": 3
+  },
+  "blocklists": [],
+  "blocklistRefreshHours": 24,
+  "blockedResponse": "nxdomain",
+  "dohCanaryNxdomain": true,
+  "clientAcl": [],
+  "rateLimitPerClientQps": 0,
+  "categories": {},
+  "internalZones": [],
+  "conditionalForwarders": [],
+  "internalFallback": "auto",
+  "internalTimeoutMs": 700,
+  "selfRecord": true,
+  "forwardLoopGuard": true,
+  "loopPeers": [],
+  "reverseForwarders": [],
+  "rebindingAllowlist": [],
+  "dnsCookies": true,
+  "failoverJitter": true,
+  "localRecords": [],
+  "dot": true,
+  "doh": true,
+  "blockPagePort": 8053,
+  "defaultCacheTarget": "10.0.0.50",
+  "dotPort": 853,
+  "dohPort": 8443
+}

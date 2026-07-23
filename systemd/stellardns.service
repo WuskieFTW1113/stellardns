@@ -1,0 +1,19 @@
+[Unit]
+Description=StellarDNS gaming DNS server
+After=network-online.target
+Wants=network-online.target
+# Do not permanently give up after a crash loop — DNS must come back.
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/env node /opt/stellardns/server.js
+Restart=always
+RestartSec=2
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+WorkingDirectory=/opt/stellardns
+# Restart if it stops answering entirely
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StellarDNS</title>
+<style>
+  :root{
+    --bg:#0a0f16; --bg2:#0e141d; --panel:#111925; --panel2:#161f2c; --line:#1e2a3a;
+    --line2:#26374b; --ink:#e6edf6; --ink2:#9fb0c6; --dim:#63748d;
+    --sig:#31e39a; --sig-dim:#1c8b62; --blue:#4a9eff; --amber:#ffbb52; --red:#ff5f6e; --violet:#9d8cff;
+    --r:12px; --shadow:0 8px 30px -12px #000a;
+  }
+  *{box-sizing:border-box;margin:0}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    background:
+      radial-gradient(1100px 600px at 82% -8%, #12403233 0%, transparent 55%),
+      radial-gradient(900px 500px at 0% 0%, #10233d33 0%, transparent 50%),
+      var(--bg);
+    color:var(--ink);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+    letter-spacing:.1px; min-height:100vh;
+  }
+  .mono{font-family:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,monospace}
+  h1,h2,h3{font-weight:600;letter-spacing:-.2px}
+  button{font:inherit;cursor:pointer;border:0;border-radius:9px;padding:8px 14px;font-weight:600;
+    background:var(--sig);color:#04150e;transition:.15s;letter-spacing:.2px}
+  button:hover{filter:brightness(1.08)} button:active{transform:translateY(1px)}
+  button.ghost{background:var(--panel2);color:var(--ink);border:1px solid var(--line2)}
+  button.ghost:hover{background:#1c2838;border-color:var(--sig-dim)}
+  button.danger{background:#2a1520;color:var(--red);border:1px solid #4a2530}
+  button.danger:hover{background:#3a1a28}
+  button.sm{padding:5px 10px;font-size:12.5px}
+  input,textarea,select{font:inherit;background:#0c131c;border:1px solid var(--line2);color:var(--ink);
+    border-radius:8px;padding:8px 11px;width:100%;transition:.12s}
+  input:focus,textarea:focus,select:focus{outline:0;border-color:var(--sig-dim);box-shadow:0 0 0 3px #31e39a1a}
+  textarea{resize:vertical;min-height:88px}
+  ::placeholder{color:var(--dim)}
+  label.fld{display:block;font-size:12px;color:var(--ink2);margin:0 0 5px;font-weight:500}
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 9px;
+    border-radius:999px;background:var(--panel2);color:var(--ink2);border:1px solid var(--line)}
+  .pill.on{background:#0f2a20;color:var(--sig);border-color:#1c5a41}
+  .pill.off{background:#2a1518;color:var(--red);border-color:#5a2530}
+
+  #shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
+  aside{background:linear-gradient(180deg,var(--bg2),var(--bg));border-right:1px solid var(--line);
+    padding:22px 14px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
+  .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px}
+  .brand .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--sig),#1a7fd6);
+    display:grid;place-items:center;color:#04150e;font-weight:800;font-size:17px;box-shadow:0 0 20px -4px #31e39a66}
+  .brand b{font-size:16px;letter-spacing:-.3px}.brand span{color:var(--sig)}
+  .brand small{display:block;color:var(--dim);font-size:10.5px;letter-spacing:.4px;font-weight:500;margin-top:1px}
+  nav.side{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+  nav.side a{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;color:var(--ink2);
+    font-weight:500;font-size:13.5px;cursor:pointer;transition:.12s;border:1px solid transparent}
+  nav.side a:hover{background:#141d29;color:var(--ink)}
+  nav.side a.active{background:#132132;color:var(--ink);border-color:var(--line2)}
+  nav.side a.active .ic{color:var(--sig)}
+  nav.side a .ic{width:17px;text-align:center;opacity:.9;color:var(--dim)}
+  .side-foot{margin-top:auto;padding:12px 10px 2px;border-top:1px solid var(--line);font-size:11.5px;color:var(--dim)}
+  .side-foot .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--sig);
+    box-shadow:0 0 8px var(--sig);margin-right:6px;animation:pulse 2.4s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  main{padding:26px 30px 60px;max-width:1180px}
+  .head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap}
+  .head h1{font-size:23px}.head p{color:var(--dim);font-size:13px;margin-top:3px}
+  .head .r{display:flex;gap:8px;align-items:center}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);
+    border-radius:var(--r);padding:15px 16px;position:relative;overflow:hidden}
+  .card::after{content:"";position:absolute;inset:0 0 auto 0;height:2px;
+    background:linear-gradient(90deg,var(--sig),transparent 70%);opacity:.5}
+  .card .k{font-size:11.5px;color:var(--dim);font-weight:500;letter-spacing:.3px;text-transform:uppercase}
+  .card .v{font-size:28px;font-weight:700;letter-spacing:-1px;margin-top:5px;font-family:ui-monospace,monospace}
+  .card .v.sig{color:var(--sig)}.card .v.blue{color:var(--blue)}.card .v.amber{color:var(--amber)}
+  .card .sub{font-size:11.5px;color:var(--ink2);margin-top:3px}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    padding:20px;margin-bottom:18px;box-shadow:var(--shadow)}
+  .panel h2{font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:9px}
+  .panel h2 .ic{color:var(--sig)}
+  .panel .desc{color:var(--dim);font-size:12.5px;margin-bottom:16px;line-height:1.5}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .row{display:flex;gap:9px;align-items:center;margin-top:10px;flex-wrap:wrap}
+  .row>input,.row>select{flex:1;min-width:110px}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;
+    letter-spacing:.4px;padding:8px 10px;border-bottom:1px solid var(--line)}
+  td{padding:9px 10px;border-bottom:1px solid #172230}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#0e1721}
+
+  .tg{position:relative;width:42px;height:24px;background:#28323f;border-radius:99px;cursor:pointer;
+    transition:.18s;flex:none;border:1px solid #333f4e}
+  .tg.on{background:var(--sig);border-color:var(--sig)}
+  .tg::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;background:#fff;
+    border-radius:50%;transition:.18s;box-shadow:0 1px 3px #0007}
+  .tg.on::after{left:20px}
+
+  .cat{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;
+    border:1px solid var(--line);margin-bottom:8px;background:var(--panel2);transition:.12s}
+  .cat:hover{border-color:var(--line2)}
+  .cat .nm{width:120px;font-weight:600;font-size:13.5px;text-transform:capitalize;flex:none}
+  .cat .nm small{display:block;font-weight:400;color:var(--dim);font-size:11px;text-transform:none}
+  .cat input.tgt{flex:1;min-width:120px}
+  .cat .acts{display:flex;gap:6px;flex:none}
+
+  .logwrap{max-height:460px;overflow:auto;border-radius:10px;border:1px solid var(--line)}
+  .logwrap table{font-size:12.5px}
+  .logwrap th{position:sticky;top:0;background:var(--panel);z-index:1}
+  .disp{font-family:ui-monospace,monospace;font-size:11.5px;padding:2px 7px;border-radius:5px;font-weight:600}
+  .d-cache{background:#0f2a20;color:var(--sig)}.d-rewrite{background:#10263f;color:var(--blue)}
+  .d-blocked{background:#2a1518;color:var(--red)}.d-stale{background:#2a2313;color:var(--amber)}
+  .d-forward{background:#1d1633;color:var(--violet)}.d-local{background:#132132;color:var(--ink2)}
+  .d-upstream{background:#141d29;color:var(--ink2)}
+
+  #login{position:fixed;inset:0;display:grid;place-items:center;
+    background:radial-gradient(800px 500px at 50% 20%,#0f2a2033,transparent),var(--bg);z-index:50}
+  #login .box{width:360px;max-width:92vw;background:var(--panel);border:1px solid var(--line2);
+    border-radius:16px;padding:30px 28px;box-shadow:0 30px 80px -20px #000}
+  #login .lg{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,var(--sig),#1a7fd6);
+    display:grid;place-items:center;color:#04150e;font-weight:800;font-size:24px;margin:0 auto 16px;
+    box-shadow:0 0 30px -6px #31e39a99}
+  #login h2{text-align:center;font-size:20px;margin-bottom:3px}
+  #login p{text-align:center;color:var(--dim);font-size:12.5px;margin-bottom:22px}
+  #login .box>*+*{margin-top:11px}
+  #login .msg{text-align:center;font-size:12.5px;min-height:16px;color:var(--amber)}
+  .divider{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:11px;margin:14px 0}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+
+  .hidden{display:none!important}
+  .empty{color:var(--dim);font-size:13px;text-align:center;padding:26px}
+  .tag{font-size:10.5px;color:var(--dim);font-family:ui-monospace,monospace}
+  .flash{position:fixed;bottom:22px;right:22px;background:var(--panel2);border:1px solid var(--sig-dim);
+    color:var(--ink);padding:11px 16px;border-radius:10px;font-size:13px;box-shadow:var(--shadow);
+    opacity:0;transform:translateY(8px);transition:.2s;z-index:60}
+  .flash.show{opacity:1;transform:none}
+  .menu-btn{display:none;align-items:center;justify-content:center;width:38px;height:38px;padding:0}
+  @media(max-width:720px){
+    #shell{grid-template-columns:1fr}
+    aside{position:fixed;left:0;top:0;bottom:0;z-index:40;transform:translateX(-100%);transition:.2s;width:230px}
+    aside.open{transform:none}
+    main{padding:18px 16px 50px}
+    .menu-btn{display:inline-flex!important}
+  }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="box">
+    <div class="lg">✦</div>
+    <h2>StellarDNS</h2>
+    <p>Sign in to the resolver console</p>
+    <div><label class="fld">Username</label><input id="lg_user" autocomplete="username" placeholder="admin"></div>
+    <div><label class="fld">Password</label><input id="lg_pass" type="password" autocomplete="current-password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <button style="width:100%;margin-top:16px" onclick="doLogin()">Sign in</button>
+    <div class="divider">or use an API token</div>
+    <div class="row" style="margin:0"><input id="lg_token" type="password" placeholder="API token"><button class="ghost" onclick="useToken()">Use token</button></div>
+    <div class="msg" id="lg_msg"></div>
+  </div>
+</div>
+
+<div id="shell" class="hidden">
+  <aside id="aside">
+    <div class="brand">
+      <div class="logo">✦</div>
+      <div><b>Stellar<span>DNS</span></b><small class="mono">RESOLVER CONSOLE</small></div>
+    </div>
+    <nav class="side" id="nav">
+      <a data-v="overview" class="active"><span class="ic">◆</span> Overview</a>
+      <a data-v="rewrites"><span class="ic">⇄</span> Rewrites &amp; launchers</a>
+      <a data-v="blocking"><span class="ic">⊘</span> Blocking</a>
+      <a data-v="zones"><span class="ic">⌂</span> Local &amp; internal zones</a>
+      <a data-v="upstreams"><span class="ic">↑</span> Upstreams</a>
+      <a data-v="log"><span class="ic">≣</span> Query log</a>
+      <a data-v="analytics"><span class="ic">▦</span> Analytics</a>
+      <a data-v="access"><span class="ic">⚿</span> Access &amp; users</a>
+      <a data-v="settings"><span class="ic">⚙</span> Settings</a>
+    </nav>
+    <div class="side-foot">
+      <div><span class="dot"></span><span id="statusline">live</span></div>
+      <div style="margin-top:6px" id="uptime"></div>
+      <div style="margin-top:6px" id="ipv6state"></div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="head">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="ghost menu-btn" onclick="document.getElementById('aside').classList.toggle('open')">☰</button>
+        <div><h1 id="vtitle">Overview</h1><p id="vsub">Live resolver status</p></div>
+      </div>
+      <div class="r">
+        <span class="pill" id="whoami"></span>
+        <button class="ghost sm" onclick="doLogout()">Sign out</button>
+      </div>
+    </div>
+
+    <section data-view="overview">
+      <div class="cards" id="cards"></div>
+      <div class="grid2">
+        <div class="panel">
+          <h2><span class="ic">↑</span> Upstream health</h2>
+          <div class="desc">Adaptive per-forwarder timing and circuit-breaker state.</div>
+          <table><thead><tr><th>Forwarder</th><th>Latency</th><th>Timeout</th><th>State</th></tr></thead><tbody id="ov_up"></tbody></table>
+        </div>
+        <div class="panel">
+          <h2><span class="ic">⚡</span> Recent activity</h2>
+          <div class="desc">Last few resolutions across all clients.</div>
+          <div class="logwrap" style="max-height:300px"><table><thead><tr><th>Name</th><th>Result</th></tr></thead><tbody id="ov_log"></tbody></table></div>
+        </div>
+      </div>
+    </section>
+
+    <section data-view="rewrites" class="hidden">
+      <div class="panel">
+        <h2><span class="ic">⇄</span> LANCache rewrites &amp; launcher toggles</h2>
+        <div class="desc">Each category answers with your cache IP for every domain it owns — a consistent static rewrite, no lancache-dns container. Toggle a launcher off to return NXDOMAIN.</div>
+        <div id="cats"></div>
+        <div class="row" style="margin-top:14px">
+          <input id="newcat" placeholder="new category name" style="max-width:200px">
+          <input id="newcat_ip" placeholder="cache IPv4" style="max-width:160px">
+          <button onclick="addCategory()">Add category</button>
+          <button class="ghost" onclick="importUklans()">Import full uklans list</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">⌗</span> Domain editor</h2>
+        <div class="desc">Pick a category to see its domains. Add, remove, or move a domain to another category — rewrites are fully interchangeable.</div>
+        <div class="row" style="margin-bottom:8px">
+          <select id="ed_cat" onchange="renderDomains()" style="max-width:220px"></select>
+        </div>
+        <div id="domlist"></div>
+        <div class="row">
+          <input id="ed_newdom" placeholder="add domain (e.g. cdn.example.com)" style="max-width:280px">
+          <button onclick="addDomain()">Add to category</button>
+        </div>
+      </div>
+    </section>
+
+    <section data-view="blocking" class="hidden">
+      <div class="panel">
+        <h2><span class="ic">⊘</span> Blocklists</h2>
+        <div class="desc">AdGuard, hosts, or plain-domain format URLs — one per line. Lists are validated before applying; the last good version is kept for instant rollback if an update is malformed.</div>
+        <textarea id="bl" placeholder="https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt"></textarea>
+        <div class="row"><button onclick="saveBlocklists()">Save &amp; refresh</button><button class="ghost" onclick="refreshBlocklists()">Refresh now</button><span class="pill" id="blmeta"></span></div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">◱</span> Block response</h2>
+        <div class="desc">What a blocked domain returns. Block pages show the reason but only work cleanly over HTTP, or with a trusted internal CA for HTTPS.</div>
+        <div class="row">
+          <select id="blockmode" style="max-width:220px">
+            <option value="nxdomain">NXDOMAIN (silent)</option>
+            <option value="zeroip">0.0.0.0 (null route)</option>
+            <option value="blockpage">Block page with reason</option>
+          </select>
+          <input id="blockpageip" placeholder="block page IP (this host)" style="max-width:200px">
+          <button onclick="saveBlockMode()">Save</button>
+        </div>
+      </div>
+    </section>
+
+    <section data-view="zones" class="hidden">
+      <div class="grid2">
+        <div class="panel">
+          <h2><span class="ic">⌂</span> Local records</h2>
+          <div class="desc">Authoritative A / AAAA / TXT / SRV / CNAME records. Put your apt-cacher-ng <span class="mono">_apt_proxy._tcp</span> SRV and Apple content-caching TXT records here.</div>
+          <textarea id="lr" style="min-height:150px" class="mono"></textarea>
+          <div class="row"><button onclick="saveLocal()">Save records</button><span class="pill" id="lrmsg"></span></div>
+        </div>
+        <div class="panel">
+          <h2><span class="ic">⇢</span> Internal zones &amp; forwarders</h2>
+          <div class="desc">Internal TLDs (one per line) never leak to public upstreams. Conditional forwarders route a zone to your AD / internal DNS — e.g. <span class="mono">stellarad.internal</span> → your domain controller.</div>
+          <label class="fld">Internal zones</label>
+          <textarea id="izones" style="min-height:56px" class="mono" placeholder="internal&#10;lan&#10;home.arpa"></textarea>
+          <label class="fld" style="margin-top:10px">Fallback for unmatched internal names</label>
+          <div class="row" style="margin-top:0">
+            <select id="ifb_mode" style="max-width:170px" onchange="document.getElementById('ifb_ip').style.display=(this.value==='manual'?'':'none')">
+              <option value="auto">Auto — use my router</option>
+              <option value="manual">Specific IP…</option>
+              <option value="off">NXDOMAIN (don't ask)</option>
+            </select>
+            <input id="ifb_ip" placeholder="e.g. 192.168.9.1" style="max-width:160px;display:none">
+            <span class="pill" id="ifb_active"></span>
+          </div>
+          <div class="tag" style="margin-top:6px;color:var(--dim)">Names like <span class="mono">speedtest.internal</span> with no forwarder or local record go here — normally OPNsense/pfSense, which is authoritative for them. Never sent to public upstreams.</div>
+          <label class="fld" style="margin-top:12px">Conditional forwarders (JSON)</label>
+          <textarea id="cfwd" style="min-height:96px" class="mono" placeholder='[{"zone":"stellarad.internal","upstreams":[{"name":"dc1","address":"192.168.9.2","port":53}]}]'></textarea>
+          <div class="row"><button onclick="saveForwarders()">Save zones</button><span class="pill" id="fwmsg"></span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">⌸</span> Active Directory domain</h2>
+        <div class="desc">Point an AD domain at your domain controller in one step. This forwards the whole zone (including <span class="mono">_msdcs</span> and all SRV records AD clients need), marks the TLD internal so it never leaks, and sends private reverse (PTR) lookups to the DC — AD-joined machines depend on those.</div>
+        <div class="row">
+          <input id="ad_domain" placeholder="AD domain (e.g. stellarad.internal)" style="max-width:250px">
+          <input id="ad_dcs" placeholder="DC IPs, comma-separated (e.g. 192.168.6.110)" style="max-width:280px">
+          <button onclick="addAdDomain()">Add domain controller</button>
+        </div>
+        <div id="adout" class="tag" style="margin-top:10px"></div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">⚒</span> Record generators</h2>
+        <div class="desc">Build the tricky discovery records correctly. Generated records are appended to your local records above — review, then save there.</div>
+        <div class="grid2" style="margin-top:4px">
+          <div>
+            <label class="fld">apt-cacher-ng (Debian/Ubuntu proxy discovery)</label>
+            <div class="row" style="margin-top:4px"><input id="apt_zone" placeholder="zone (e.g. lan)" style="max-width:110px"><input id="apt_host" placeholder="hostname to publish" style="max-width:150px"><input id="apt_ip" placeholder="proxy IP" style="max-width:120px"><input id="apt_port" placeholder="3142" style="max-width:80px"></div>
+            <div class="row"><button class="ghost" onclick="genApt()">Generate SRV</button></div>
+          </div>
+          <div>
+            <label class="fld">Apple Content Caching discovery</label>
+            <div class="row" style="margin-top:4px"><input id="ap_zone" placeholder="zone (e.g. lan)" style="max-width:120px"><input id="ap_pub" placeholder="public range" style="max-width:150px"><input id="ap_loc" placeholder="local range" style="max-width:150px"></div>
+            <div class="row"><button class="ghost" onclick="genApple()">Generate TXT</button></div>
+          </div>
+        </div>
+        <div id="genout" class="tag" style="margin-top:10px"></div>
+      </div>
+    </section>
+
+    <section data-view="upstreams" class="hidden">
+      <div class="panel">
+        <h2><span class="ic">↑</span> Upstream forwarders</h2>
+        <div class="desc">Where cache misses go. Each is health-checked with adaptive timeouts and a circuit breaker; a failing forwarder is pulled from rotation and re-probed automatically.</div>
+        <table><thead><tr><th>Name</th><th>Transport</th><th>Address</th><th>Latency</th><th>Sent</th><th>Failed</th><th>State</th></tr></thead><tbody id="up_tbl"></tbody></table>
+        <div class="row" style="margin-top:14px">
+          <select id="up_preset" style="max-width:300px">
+            <option value="">Encrypted presets — pick one to load…</option>
+            <option value="cf-doh">Cloudflare — DoH (encrypted)</option>
+            <option value="cf-dot">Cloudflare — DoT (encrypted)</option>
+            <option value="quad9-doh">Quad9 — DoH (encrypted, filtered)</option>
+            <option value="quad9-dot">Quad9 — DoT (encrypted, filtered)</option>
+            <option value="mullvad-doh">Mullvad — DoH (encrypted, no logging)</option>
+            <option value="plain">Cloudflare + Quad9 — plain UDP (unencrypted)</option>
+          </select>
+          <button class="ghost" onclick="loadPreset()">Load preset</button>
+        </div>
+        <label class="fld" style="margin-top:16px">Forwarder list (JSON)</label>
+        <textarea id="up_json" class="mono" style="min-height:90px"></textarea>
+        <div class="row"><button onclick="saveUpstreams()">Save forwarders</button><span class="pill" id="upmsg"></span></div>
+      </div>
+    </section>
+
+    <section data-view="log" class="hidden">
+      <div class="panel">
+        <h2><span class="ic">≣</span> Query log <button class="ghost sm" style="margin-left:auto" onclick="flushCache()">Flush cache</button></h2>
+        <div class="desc">Live resolution history. Color shows how each query was answered.</div>
+        <div class="logwrap"><table><thead><tr><th>Time</th><th>Client</th><th>Name</th><th>Type</th><th>Rcode</th><th>Disposition</th><th>ms</th></tr></thead><tbody id="log"></tbody></table></div>
+      </div>
+    </section>
+
+    <section data-view="access" class="hidden">
+      <div class="grid2">
+        <div class="panel">
+          <h2><span class="ic">⚿</span> Users</h2>
+          <div class="desc">Console accounts. Passwords are scrypt-hashed.</div>
+          <div id="userlist"></div>
+          <div class="row" style="margin-top:12px">
+            <input id="nu_user" placeholder="username" style="max-width:150px">
+            <input id="nu_pass" type="password" placeholder="password (6+)" style="max-width:170px">
+            <button onclick="addUser()">Add user</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2><span class="ic">⚿</span> My password</h2>
+          <div class="desc">Change the password for the account you're signed in as.</div>
+          <label class="fld">New password</label>
+          <input id="pw_new" type="password" placeholder="new password">
+          <div class="row"><button onclick="changePw()">Update password</button><span class="pill" id="pwmsg"></span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">⛊</span> Client access control</h2>
+        <div class="desc">Restrict who can query (LAN/VPN subnets), throttle abusive clients, and set per-VLAN policy. Empty ACL = allow all.</div>
+        <label class="fld">Allowed client subnets (one CIDR per line, empty = all)</label>
+        <textarea id="acl" style="min-height:56px" class="mono" placeholder="192.168.0.0/16&#10;10.0.0.0/8"></textarea>
+        <label class="fld" style="margin-top:10px">Per-client rate limit (queries/sec, 0 = off)</label>
+        <input id="rl" type="number" style="max-width:140px" placeholder="0">
+        <label class="fld" style="margin-top:10px">Per-subnet policy (JSON)</label>
+        <textarea id="sp" style="min-height:80px" class="mono" placeholder='[{"cidr":"192.168.40.0/24","disableCategories":["epicgames"]},{"cidr":"192.168.50.0/24","blockAll":true}]'></textarea>
+        <div class="row"><button onclick="saveAccess()">Save access</button><span class="pill" id="accmsg"></span></div>
+      </div>
+    </section>
+
+    <section data-view="analytics" class="hidden">
+      <div class="grid2">
+        <div class="panel">
+          <h2><span class="ic">▲</span> Top domains</h2>
+          <div class="desc">Most-queried names in the current log window.</div>
+          <table><thead><tr><th>Domain</th><th style="width:70px;text-align:right">Count</th></tr></thead><tbody id="an_dom"></tbody></table>
+        </div>
+        <div class="panel">
+          <h2><span class="ic">⊘</span> Top blocked</h2>
+          <div class="desc">Most-blocked names — tune your lists or launcher toggles from here.</div>
+          <table><thead><tr><th>Domain</th><th style="width:70px;text-align:right">Count</th></tr></thead><tbody id="an_blk"></tbody></table>
+        </div>
+        <div class="panel">
+          <h2><span class="ic">◉</span> Top clients</h2>
+          <div class="desc">Which devices are asking the most.</div>
+          <table><thead><tr><th>Client</th><th style="width:70px;text-align:right">Count</th></tr></thead><tbody id="an_cli"></tbody></table>
+        </div>
+        <div class="panel">
+          <h2><span class="ic">◈</span> How queries resolved</h2>
+          <div class="desc">Breakdown by disposition across the sample.</div>
+          <div id="an_disp"></div>
+        </div>
+      </div>
+    </section>
+
+    <section data-view="settings" class="hidden">
+      <div class="panel">
+        <h2><span class="ic">⚙</span> Resolver settings</h2>
+        <div class="desc">Protocol behavior and hardening. Changes apply on save; some take effect on next restart.</div>
+        <div id="settings-toggles"></div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">▤</span> Live config</h2>
+        <div class="desc">The running configuration. For full control, edit config.json on disk and restart.</div>
+        <textarea id="rawcfg" class="mono" style="min-height:220px" readonly></textarea>
+        <div class="row"><button class="ghost" onclick="loadRaw()">Reload</button></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="flash" id="flash"></div>
+
+<script>
+let TOKEN='', WHO=null, CATS={}, CFG={};
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+function flash(m){const f=$('#flash');f.textContent=m;f.classList.add('show');setTimeout(()=>f.classList.remove('show'),1900);}
+
+async function api(path,opts={}){
+  const h={'Content-Type':'application/json',...(opts.headers||{})};
+  if(TOKEN)h['x-api-token']=TOKEN;
+  const r=await fetch(path,{...opts,credentials:'same-origin',headers:h});
+  if(r.status===401){showLogin('Session expired — sign in again');throw new Error('auth');}
+  return r.json();
+}
+
+function showLogin(m){$('#login').classList.remove('hidden');$('#shell').classList.add('hidden');if(m)$('#lg_msg').textContent=m;}
+async function doLogin(){
+  const username=$('#lg_user').value.trim(),password=$('#lg_pass').value;
+  try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
+    const d=await r.json();if(r.ok){TOKEN='';enter(d.user);}else $('#lg_msg').textContent=d.error||'Sign-in failed';}
+  catch(e){$('#lg_msg').textContent='Connection error';}
+}
+async function useToken(){TOKEN=$('#lg_token').value.trim();
+  try{const w=await api('/api/whoami');if(w.authed)enter('token');else $('#lg_msg').textContent='Invalid token';}
+  catch(e){$('#lg_msg').textContent='Invalid token';}}
+async function doLogout(){try{await fetch('/api/logout',{method:'POST',credentials:'same-origin'});}catch{}TOKEN='';location.reload();}
+function enter(user){WHO=user;$('#login').classList.add('hidden');$('#shell').classList.remove('hidden');
+  $('#whoami').textContent=user==='token'?'token auth':('signed in · '+user);boot();}
+
+const TITLES={overview:['Overview','Live resolver status'],rewrites:['Rewrites & launchers','Consistent LANCache rewrites and per-launcher toggles'],
+  blocking:['Blocking','Blocklists and block responses'],zones:['Local & internal zones','Authoritative records and conditional forwarding'],
+  upstreams:['Upstreams','Forwarder health and configuration'],log:['Query log','Live resolution history'],
+  analytics:['Analytics','Top domains, clients and blocked names'],
+  access:['Access & users','Console accounts and client access control'],settings:['Settings','Protocol behavior and hardening']};
+$$('#nav a').forEach(a=>a.onclick=()=>{
+  $$('#nav a').forEach(x=>x.classList.remove('active'));a.classList.add('active');
+  const v=a.dataset.v;$$('section[data-view]').forEach(s=>s.classList.toggle('hidden',s.dataset.view!==v));
+  const t=TITLES[v]||[v.charAt(0).toUpperCase()+v.slice(1),''];
+  $('#vtitle').textContent=t[0];$('#vsub').textContent=t[1];$('#aside').classList.remove('open');
+  try{ if(v==='analytics')loadAnalytics(); }catch(e){ console.error('view load failed',e); }});
+
+let statsTimer,logTimer;
+async function boot(){
+  await refreshStats();await refreshLog();
+  await Promise.all([loadCategories(),loadBlocklists(),loadZones(),loadUpstreams(),loadUsers(),loadAccess(),loadSettings(),loadRaw()]);
+  clearInterval(statsTimer);clearInterval(logTimer);
+  statsTimer=setInterval(refreshStats,3000);logTimer=setInterval(refreshLog,4000);
+  setInterval(()=>{ const s=document.querySelector('section[data-view="analytics"]');
+    if(s && !s.classList.contains('hidden')) loadAnalytics(); },5000);
+}
+function fmt(n){return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n??0);}
+function dur(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+(h?h+'h ':'')+m+'m';}
+
+async function refreshStats(){
+  let s;try{s=await api('/api/stats');}catch{return;}
+  CFG=s.config||CFG;
+  const st=s.stats,hit=st.queries?Math.round(100*(st.cacheHits+st.cacheStale)/st.queries):0;
+  $('#uptime').textContent='up '+dur(s.uptimeSec);
+  const v6=s.ipv6||{};
+  $('#ipv6state').innerHTML = v6.listening
+    ? '<span class="pill on">IPv6 listening</span>'
+    : (v6.configured ? '<span class="pill off">IPv6 '+(v6.reason||'down')+'</span>' : '<span class="pill">IPv6 off</span>');
+  $('#cards').innerHTML=[
+    ['Queries',fmt(st.queries),'','sig'],
+    ['Cache hit rate',hit+'%',fmt(st.cacheHits)+' hits','blue'],
+    ['Rewrites',fmt(st.rewrites),'to cache','sig'],
+    ['Blocked',fmt(st.blocked),'&nbsp;',''],
+    ['Cache entries',fmt(s.cacheSize),'&nbsp;',''],
+    ['Blocklist',fmt(s.blocklist&&s.blocklist.entries),'domains','amber'],
+    ['Stale served',fmt(st.cacheStale),'outage saves','amber'],
+    ['SERVFAIL',fmt(st.servfail),'never cached','']
+  ].map(([k,v,sub,c])=>`<div class="card"><div class="k">${k}</div><div class="v ${c||''}">${v}</div><div class="sub">${sub||'&nbsp;'}</div></div>`).join('');
+  const up=(s.upstreams||[]);
+  $('#ov_up').innerHTML=up.map(u=>`<tr><td>${u.name}</td><td class="mono">${u.srtt}ms</td><td class="mono">${u.timeout}ms</td>
+    <td><span class="pill ${u.circuitOpen?'off':'on'}">${u.circuitOpen?'open':'healthy'}</span></td></tr>`).join('')||'<tr><td colspan=4 class="empty">no forwarders</td></tr>';
+  const proto=u=>{const p=(u.protocol||'udp');
+    if(p==='https')return '<span class="pill on">DoH encrypted</span>';
+    if(p==='tls')return '<span class="pill on">DoT encrypted</span>';
+    return '<span class="pill off">plain UDP</span>';};
+  $('#up_tbl').innerHTML=up.map(u=>`<tr><td>${u.name}</td><td>${proto(u)}</td>
+    <td class="mono tag">${u.address}:${u.port||53}${u.hostname?'<br><span style="opacity:.7">sni '+u.hostname+'</span>':''}</td>
+    <td class="mono">${u.srtt}ms</td><td>${fmt(u.sent)}</td><td>${fmt(u.failed)}</td>
+    <td><span class="pill ${u.circuitOpen?'off':'on'}">${u.circuitOpen?'open':'healthy'}</span></td></tr>`).join('')||'<tr><td colspan=7 class="empty">none</td></tr>';
+  $('#blmeta').textContent=fmt(s.blocklist&&s.blocklist.entries)+' domains';
+}
+function dispClass(d){d=d||'';if(d.startsWith('rewrite'))return'd-rewrite';
+  if(d.startsWith('blocked')||d.startsWith('launcher')||d.startsWith('rebind')||d.startsWith('internal-nx')||d.startsWith('policy'))return'd-blocked';
+  if(d.startsWith('cache'))return'd-cache';if(d.startsWith('stale'))return'd-stale';if(d.startsWith('forward'))return'd-forward';
+  if(d==='local')return'd-local';return'd-upstream';}
+async function refreshLog(){
+  let log;try{log=await api('/api/log?n=120');}catch{return;}
+  const rows=log.slice().reverse();
+  $('#log').innerHTML=rows.map(e=>`<tr><td class="tag">${new Date(e.t).toLocaleTimeString()}</td><td class="mono">${e.client}</td>
+    <td>${e.name}</td><td class="tag">${e.type}</td><td class="tag">${e.rcode}</td>
+    <td><span class="disp ${dispClass(e.disp)}">${e.disp||'—'}</span></td><td class="tag">${e.ms}</td></tr>`).join('')||'<tr><td colspan=7 class="empty">no queries yet</td></tr>';
+  $('#ov_log').innerHTML=rows.slice(0,12).map(e=>`<tr><td>${e.name}</td><td><span class="disp ${dispClass(e.disp)}">${e.disp||'—'}</span></td></tr>`).join('')||'<tr><td colspan=2 class="empty">waiting for traffic</td></tr>';
+}
+
+async function loadCategories(){
+  CATS=await api('/api/category/full');
+  const ent=Object.entries(CATS);
+  $('#cats').innerHTML=ent.map(([name,c])=>`<div class="cat">
+    <div class="tg ${c.enabled?'on':''}" onclick="toggleCat('${name}',this)"></div>
+    <div class="nm">${name}<small>${c.domains.length} domains</small></div>
+    <input class="tgt" value="${c.target||''}" placeholder="cache IPv4 (blank = passthrough)" onchange="setTarget('${name}',this.value)">
+    <div class="acts"><button class="ghost sm" onclick="renameCat('${name}')">rename</button>
+    <button class="danger sm" onclick="delCat('${name}')">delete</button></div></div>`).join('')||'<div class="empty">No categories yet — add one or import the uklans list.</div>';
+  const sel=$('#ed_cat');const cur=sel.value;
+  sel.innerHTML=ent.map(([n])=>`<option${n===cur?' selected':''}>${n}</option>`).join('');
+  renderDomains();
+}
+async function toggleCat(name,el){const on=!el.classList.contains('on');el.classList.toggle('on',on);
+  await api('/api/toggle',{method:'POST',body:JSON.stringify({category:name,enabled:on})});loadCategories();}
+async function setTarget(name,v){await api('/api/category',{method:'POST',body:JSON.stringify({category:name,target:v.trim()})});flash('Saved '+name+' → '+(v.trim()||'passthrough'));}
+async function addCategory(){const category=$('#newcat').value.trim(),target=$('#newcat_ip').value.trim();if(!category)return;
+  await api('/api/category',{method:'POST',body:JSON.stringify({category,target,domains:[]})});
+  $('#newcat').value='';$('#newcat_ip').value='';loadCategories();flash('Added '+category);}
+async function renameCat(from){const to=prompt('Rename "'+from+'" to:',from);if(!to||to===from)return;
+  const r=await api('/api/category/rename',{method:'POST',body:JSON.stringify({from,to})});
+  if(r.error)flash(r.error);else{flash('Renamed to '+to);loadCategories();}}
+async function delCat(name){if(!confirm('Delete category "'+name+'" and its domains?'))return;
+  await api('/api/category/delete',{method:'POST',body:JSON.stringify({category:name})});loadCategories();flash('Deleted '+name);}
+async function importUklans(){const t=prompt('Cache IP for imported categories (blank = passthrough):','');
+  flash('Importing uklans list…');const r=await api('/api/import-uklans',{method:'POST',body:JSON.stringify(t?{defaultTarget:t.trim()}:{})});
+  flash('Imported '+Object.keys(r.imported||{}).length+' categories');loadCategories();}
+function renderDomains(){
+  const cat=$('#ed_cat').value;const c=CATS[cat];if(!c){$('#domlist').innerHTML='';return;}
+  const others=Object.keys(CATS).filter(n=>n!==cat);
+  $('#domlist').innerHTML='<div class="logwrap" style="max-height:280px"><table><thead><tr><th>Domain</th><th style="width:190px">Move to</th><th style="width:80px"></th></tr></thead><tbody>'+
+    (c.domains.map(d=>`<tr><td class="mono">${d}</td>
+      <td><select onchange="moveDomain('${d}','${cat}',this.value);this.value=''"><option value="">move to…</option>${others.map(o=>`<option>${o}</option>`).join('')}</select></td>
+      <td><button class="danger sm" onclick="rmDomain('${d}','${cat}')">remove</button></td></tr>`).join('')||'<tr><td colspan=3 class="empty">no domains</td></tr>')+
+    '</tbody></table></div>';
+}
+async function addDomain(){const cat=$('#ed_cat').value,domain=$('#ed_newdom').value.trim();if(!cat||!domain)return;
+  await api('/api/category/add-domain',{method:'POST',body:JSON.stringify({category:cat,domain})});
+  $('#ed_newdom').value='';await loadCategories();flash('Added '+domain);}
+async function rmDomain(domain,cat){await api('/api/category/remove-domain',{method:'POST',body:JSON.stringify({category:cat,domain})});await loadCategories();}
+async function moveDomain(domain,from,to){if(!to)return;await api('/api/category/move-domain',{method:'POST',body:JSON.stringify({domain,from,to})});await loadCategories();flash(domain+' → '+to);}
+
+async function loadBlocklists(){const b=await api('/api/blocklists');$('#bl').value=(b.lists||[]).map(l=>l.url).join('\n');
+  const s=await api('/api/stats');$('#blockmode').value=(s.config&&s.config.blockedResponse)||'nxdomain';if(s.config&&s.config.blockPageIP)$('#blockpageip').value=s.config.blockPageIP;}
+async function saveBlocklists(){const lists=$('#bl').value.split('\n').map(s=>s.trim()).filter(Boolean).map(url=>({name:url.split('/').pop(),url,enabled:true}));
+  flash('Validating & applying…');const r=await api('/api/blocklists',{method:'POST',body:JSON.stringify({lists})});flash((r.entries!=null?r.entries:'?')+' domains active');refreshStats();}
+async function refreshBlocklists(){flash('Refreshing…');const r=await api('/api/blocklists/refresh',{method:'POST'});flash((r.entries!=null?r.entries:'?')+' domains');refreshStats();}
+async function saveBlockMode(){await api('/api/settings',{method:'POST',body:JSON.stringify({blockedResponse:$('#blockmode').value,blockPageIP:$('#blockpageip').value.trim()})});flash('Block response saved');}
+
+async function loadZones(){
+  $('#lr').value=JSON.stringify(await api('/api/localrecords'),null,1);
+  const f=await api('/api/forwarders');
+  $('#izones').value=(f.internalZones||[]).join('\n');
+  $('#cfwd').value=JSON.stringify(f.conditionalForwarders||[],null,1);
+  const fb=f.internalFallback;
+  if(fb===false||fb===null||fb===undefined){$('#ifb_mode').value='off';}
+  else if(fb==='auto'){$('#ifb_mode').value='auto';}
+  else if(Array.isArray(fb)&&fb.length){$('#ifb_mode').value='manual';$('#ifb_ip').value=fb[0].address||'';$('#ifb_ip').style.display='';}
+  const act=(f.internalFallbackActive||[]);
+  $('#ifb_active').textContent = act.length? ('active: '+act.join(', ')) : (f.detectedGateway? ('gateway '+f.detectedGateway) : 'inactive');
+}
+async function saveLocal(){try{const records=JSON.parse($('#lr').value||'[]');await api('/api/localrecords',{method:'POST',body:JSON.stringify({records})});$('#lrmsg').textContent='saved '+records.length;flash('Local records saved');}catch(e){$('#lrmsg').textContent='JSON error';}}
+async function saveForwarders(){try{
+  const internalZones=$('#izones').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const conditionalForwarders=JSON.parse($('#cfwd').value||'[]');
+  const mode=$('#ifb_mode').value;
+  let internalFallback='auto';
+  if(mode==='off')internalFallback=false;
+  else if(mode==='manual'){const ip=$('#ifb_ip').value.trim();internalFallback=ip?[{name:'internal',address:ip,port:53}]:'auto';}
+  await api('/api/forwarders',{method:'POST',body:JSON.stringify({internalZones,conditionalForwarders,internalFallback})});
+  $('#fwmsg').textContent='saved';flash('Zones saved');loadZones();}catch(e){$('#fwmsg').textContent='JSON error';}}
+
+const UP_PRESETS={
+ 'cf-doh':[{name:'cloudflare-doh',protocol:'https',address:'1.1.1.1',port:443,hostname:'cloudflare-dns.com',path:'/dns-query'},
+           {name:'cloudflare-doh2',protocol:'https',address:'1.0.0.1',port:443,hostname:'cloudflare-dns.com',path:'/dns-query'}],
+ 'cf-dot':[{name:'cloudflare-dot',protocol:'tls',address:'1.1.1.1',port:853,hostname:'cloudflare-dns.com'},
+           {name:'cloudflare-dot2',protocol:'tls',address:'1.0.0.1',port:853,hostname:'cloudflare-dns.com'}],
+ 'quad9-doh':[{name:'quad9-doh',protocol:'https',address:'9.9.9.9',port:443,hostname:'dns.quad9.net',path:'/dns-query'},
+              {name:'quad9-doh2',protocol:'https',address:'149.112.112.112',port:443,hostname:'dns.quad9.net',path:'/dns-query'}],
+ 'quad9-dot':[{name:'quad9-dot',protocol:'tls',address:'9.9.9.9',port:853,hostname:'dns.quad9.net'},
+              {name:'quad9-dot2',protocol:'tls',address:'149.112.112.112',port:853,hostname:'dns.quad9.net'}],
+ 'mullvad-doh':[{name:'mullvad-doh',protocol:'https',address:'194.242.2.2',port:443,hostname:'dns.mullvad.net',path:'/dns-query'}],
+ 'plain':[{name:'cloudflare',address:'1.1.1.1',port:53},{name:'quad9',address:'9.9.9.9',port:53}]
+};
+function loadPreset(){
+  const k=$('#up_preset').value; if(!k||!UP_PRESETS[k])return;
+  $('#up_json').value=JSON.stringify(UP_PRESETS[k],null,1);
+  flash('Preset loaded — click Save forwarders to apply');
+}
+async function loadUpstreams(){const s=await api('/api/stats');
+  $('#up_json').value=JSON.stringify((s.upstreams||[]).map(u=>{const o={name:u.name,address:u.address,port:u.port||53};
+    if(u.protocol&&u.protocol!=='udp')o.protocol=u.protocol; if(u.hostname)o.hostname=u.hostname; return o;}),null,1);}
+async function saveUpstreams(){try{const list=JSON.parse($('#up_json').value||'[]');await api('/api/upstreams',{method:'POST',body:JSON.stringify({list})});$('#upmsg').textContent='saved';flash('Forwarders saved');refreshStats();}catch(e){$('#upmsg').textContent='JSON error';}}
+
+async function loadUsers(){const u=await api('/api/users');
+  $('#userlist').innerHTML=u.map(x=>`<div class="cat" style="padding:9px 12px"><div class="nm" style="width:auto;flex:1">${x.username} <span class="pill">${x.role}</span></div>${u.length>1?`<button class="danger sm" onclick="delUser('${x.username}')">remove</button>`:''}</div>`).join('');}
+async function addUser(){const username=$('#nu_user').value.trim(),password=$('#nu_pass').value;
+  const r=await api('/api/users/add',{method:'POST',body:JSON.stringify({username,password,role:'admin'})});
+  if(r.error)flash(r.error);else{$('#nu_user').value='';$('#nu_pass').value='';loadUsers();flash('User added');}}
+async function delUser(username){if(!confirm('Remove user '+username+'?'))return;await api('/api/users/delete',{method:'POST',body:JSON.stringify({username})});loadUsers();}
+async function changePw(){const newPassword=$('#pw_new').value;const r=await api('/api/passwd',{method:'POST',body:JSON.stringify({newPassword})});
+  $('#pwmsg').textContent=r.ok?'updated':(r.error||'failed');if(r.ok){$('#pw_new').value='';flash('Password updated');}}
+async function loadAccess(){const s=await api('/api/stats');const c=s.config||{};
+  $('#acl').value=(c.clientAcl||[]).join('\n');$('#rl').value=c.rateLimitPerClientQps||0;
+  const sp=await api('/api/subnetpolicies');$('#sp').value=JSON.stringify(sp,null,1);}
+async function saveAccess(){try{
+  const clientAcl=$('#acl').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const rateLimitPerClientQps=Number($('#rl').value)||0;
+  const policies=JSON.parse($('#sp').value||'[]');
+  await api('/api/settings',{method:'POST',body:JSON.stringify({clientAcl,rateLimitPerClientQps})});
+  await api('/api/subnetpolicies',{method:'POST',body:JSON.stringify({policies})});
+  $('#accmsg').textContent='saved';flash('Access control saved');}catch(e){$('#accmsg').textContent='JSON error';}}
+
+const TOGGLES=[
+  ['serveStale','Serve stale on outage','Answer from expired cache when every upstream is down, instead of failing.',true],
+  ['prefetch','Prefetch hot records','Re-resolve popular names before they expire so peak traffic never misses.',true],
+  ['caseRandomization','0x20 case randomization','Randomize query case and verify the echo — anti cache-poisoning.',true],
+  ['dnsCookies','DNS cookies','RFC 7873 anti-spoofing on upstream queries.',true],
+  ['rebindingProtection','DNS rebinding protection','Block external names resolving to private IPs. Your rewrites and zones are exempt.',true],
+  ['failoverJitter','Jittered failover','Randomize retry timing so clients do not synchronize on a loss event.',true],
+  ['ecs','EDNS Client Subnet','Forward a truncated client subnet to upstreams for CDN accuracy. Off by default for privacy.',false],
+  ['race','Race upstreams','Query the two fastest forwarders at once, take whichever answers first.',false],
+  ['filterAAAA','Filter AAAA (force IPv4)','Suppress IPv6 answers for public names so clients use IPv4. Use when your IPv6 path is a slow tunnel. Local records and LANCache target6 are unaffected.',false],
+  ['dohCanaryNxdomain','DoH canary','Serve use-application-dns.net as NXDOMAIN so Firefox uses this resolver.',true],
+];
+async function loadSettings(){const s=await api('/api/stats');const c=s.config||{};CFG=c;
+  $('#settings-toggles').innerHTML=TOGGLES.map(([k,label,desc,def])=>{
+    const on=settingOn(c,k,def);
+    return `<div class="cat" style="align-items:flex-start"><div class="tg ${on?'on':''}" onclick="toggleSetting('${k}',this)" style="margin-top:2px"></div>
+    <div style="flex:1"><div style="font-weight:600">${label}</div><div class="tag" style="font-size:12px;color:var(--dim);margin-top:2px">${desc}</div></div></div>`;}).join('');
+}
+function settingRaw(c,k){if(k==='serveStale'||k==='prefetch')return (c.cache||{})[k];return c[k];}
+function settingOn(c,k,def){const v=settingRaw(c,k);if(v===undefined)return !!def;return v===true;}
+async function toggleSetting(k,el){const on=!el.classList.contains('on');el.classList.toggle('on',on);
+  const body={};if(k==='serveStale'||k==='prefetch')body.cache={[k]:on};else body[k]=on;
+  await api('/api/settings',{method:'POST',body:JSON.stringify(body)});flash(k+' '+(on?'on':'off'));}
+
+
+async function loadAnalytics(){
+  let a;try{a=await api('/api/analytics');}catch{return;}
+  const rows=(arr,unit)=>arr.length?arr.map(x=>`<tr><td class="mono" style="font-size:12px">${x.name}</td><td class="mono" style="text-align:right">${x.count}</td></tr>`).join(''):`<tr><td colspan=2 class="empty">no data yet</td></tr>`;
+  $('#an_dom').innerHTML=rows(a.topDomains);
+  $('#an_blk').innerHTML=rows(a.topBlocked);
+  $('#an_cli').innerHTML=rows(a.topClients);
+  const total=Object.values(a.byDisposition||{}).reduce((s,n)=>s+n,0)||1;
+  const colors={cache:'var(--sig)',rewrite:'var(--blue)',blocked:'var(--red)','launcher-off':'var(--red)',forward:'var(--violet)',upstream:'var(--ink2)',stale:'var(--amber)',local:'var(--ink2)'};
+  $('#an_disp').innerHTML=Object.entries(a.byDisposition||{}).sort((x,y)=>y[1]-x[1]).map(([k,v])=>{
+    const pct=Math.round(100*v/total);const c=colors[k]||'var(--dim)';
+    return `<div style="margin-bottom:9px"><div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px"><span>${k}</span><span class="mono">${v} · ${pct}%</span></div><div style="height:7px;border-radius:4px;background:#0c131c;overflow:hidden"><div style="height:100%;width:${pct}%;background:${c}"></div></div></div>`;
+  }).join('')||'<div class="empty">no data yet</div>';
+}
+async function addAdDomain(){
+  const domain=$('#ad_domain').value.trim(), dcs=$('#ad_dcs').value.trim();
+  if(!domain||!dcs){$('#adout').textContent='Enter the AD domain and at least one DC IP.';return;}
+  const r=await api('/api/gen/ad-domain',{method:'POST',body:JSON.stringify({domain,dcs})});
+  if(r.error){$('#adout').textContent=r.error;return;}
+  $('#adout').textContent=r.note+'  Check the server log for a reachability probe result.';
+  flash('AD domain configured');
+  loadZones();
+}
+async function genApt(){
+  const zone=$('#apt_zone').value.trim()||'lan',proxyHost=$('#apt_host').value.trim(),
+        proxyIP=$('#apt_ip').value.trim(),port=$('#apt_port').value.trim()||3142;
+  const r=await api('/api/gen/apt-cacher',{method:'POST',body:JSON.stringify({zone,proxyHost,proxyIP,port})});
+  appendGenerated(r);
+}
+async function genApple(){
+  const zone=$('#ap_zone').value.trim()||'lan',publicRanges=$('#ap_pub').value.trim(),localRanges=$('#ap_loc').value.trim();
+  const r=await api('/api/gen/apple-cache',{method:'POST',body:JSON.stringify({zone,publicRanges,localRanges})});
+  appendGenerated(r);
+}
+function appendGenerated(r){
+  try{
+    const cur=JSON.parse($('#lr').value||'[]');
+    const next=cur.concat(r.records||[]);
+    $('#lr').value=JSON.stringify(next,null,1);
+    $('#genout').textContent=(r.hint||'')+' — added to Local records above; click Save records.';
+    flash('Record generated — review & save');
+  }catch(e){$('#genout').textContent='Add to Local records manually: '+JSON.stringify(r.records);}
+}
+async function loadRaw(){try{const s=await api('/api/stats');$('#rawcfg').value=JSON.stringify(s.config||{},null,2);}catch{}}
+
+(async()=>{
+  try{const w=await(await fetch('/api/whoami',{credentials:'same-origin'})).json();if(w.authed){enter(w.user||'admin');return;}}catch{}
+  showLogin('');
+})();
+</script>
+</body>
+</html>
