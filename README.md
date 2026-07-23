@@ -1,8 +1,16 @@
-# StellarDNS — Install
+# StellarDNS v19 — Install
 
-A fast, gaming-oriented DNS server with a web console. LANCache rewrites, launcher
-on/off toggles, AdGuard blocklists, DNS-over-TLS / DNS-over-HTTPS, per-device policy,
-internal-zone forwarding, and multi-core scaling.
+A fast, gaming-oriented DNS server with a web console.
+
+- LANCache rewrites with per-launcher on/off toggles
+- AdGuard/hosts blocklists, validated before applying, with rollback
+- DNS-over-TLS and DNS-over-HTTPS — inbound *and* outbound (encrypted upstreams)
+- Internal zones, conditional forwarding, Active Directory support
+- Per-device / per-VLAN policy, client ACLs, rate limiting
+- Multi-core, IPv4 + IPv6, Prometheus metrics, query analytics
+
+Roughly 28,000 queries/sec per core with a full ruleset loaded; cache hits in ~50 µs.
+See CHANGELOG.md for what changed since the alpha.
 
 Runs on **Debian, Ubuntu, or Alpine** — bare metal, a VM, or an LXC container.
 
@@ -45,6 +53,10 @@ sudo -E sh stellardns-install.sh
 
 Run the newer installer the same way. It detects the existing install and upgrades
 in place — your config, users, cache, and rewrites are preserved. No prompts on upgrade.
+
+Upgrading from an alpha also repairs known damage: a corrupted `config.json` is restored
+from backup, an oversized cache snapshot is removed, a stale `cache.maxEntries` is
+lowered, and `dns.host6: ""` (which silently disabled IPv6) is migrated to `"::"`.
 
 ## Endpoints
 
