@@ -66,6 +66,7 @@
   "blocklists": [],
   "blocklistRefreshHours": 24,
   "blockedResponse": "nxdomain",
+  "healthName": "health.stellardns",
   "dohCanaryNxdomain": true,
   "clientAcl": [],
   "rateLimitPerClientQps": 0,
@@ -82,10 +83,9 @@
   "dnsCookies": true,
   "failoverJitter": true,
   "localRecords": [],
-  "dot": true,
-  "doh": true,
-  "blockPagePort": 8053,
-  "defaultCacheTarget": "10.0.0.50",
   "dotPort": 853,
-  "dohPort": 8443
+  "dohPort": 8443,
+  "blockPagePort": 8053,
+  "dot": true,
+  "doh": true
 }

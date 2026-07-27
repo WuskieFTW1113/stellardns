@@ -1,5 +1,7 @@
 # StellarDNS
 
+![version](https://img.shields.io/badge/version-20.0.0-31e39a) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational)
+
 A fast, gaming-oriented DNS server with a web console.
 
 Built for homelabs: LANCache rewrites with per-launcher toggles, blocklists, encrypted
@@ -40,6 +42,24 @@ Install             one script, Debian / Ubuntu / Alpine
 - 0x20 case randomization with echo verification, DNS Cookies, QNAME minimization.
 - EDNS Client Subnet is **off by default**.
 
+### Internal zone topology
+
+Point clients at **StellarDNS directly**, not at the router which then forwards here.
+
+```
+clients -> StellarDNS -> router (for DHCP-registered .internal names)   correct
+clients -> router -> StellarDNS -> router                               circular
+```
+
+In the circular form every query reaches StellarDNS sourced from the router, so the only
+resolver it could ask for an unmatched internal name is the one that just asked it. The loop
+guard correctly refuses rather than bouncing the query back, and internal names fail.
+
+Alternatively, make StellarDNS **authoritative** for the zone: add the records under Local
+records and remove the internal fallback. That removes the round trip entirely, at the cost
+of DHCP lease auto-registration (the router registers leases into DNS; StellarDNS does not).
+Static/reserved hosts are a good fit; dynamic clients are not.
+
 **Networks with structure**
 - Internal zones that never leak to public upstreams.
 - Conditional forwarding (longest-suffix match) — e.g. `ad.example.internal` → your DC.
@@ -50,6 +70,8 @@ Install             one script, Debian / Ubuntu / Alpine
   Caching discovery.
 
 **Operations**
+- Built-in `health.stellardns` liveness name — answered locally, never forwarded, so HA
+  health checks don't fail during a WAN outage.
 - Multi-core via `SO_REUSEPORT`, IPv4 + IPv6.
 - Serve-stale during upstream outages, prefetching, query coalescing, per-upstream
   circuit breakers with adaptive RTT timeouts.
@@ -190,7 +212,12 @@ node server.js
 ```
 
 Deploying in an LXC or VM: see [`docs/lxc-deployment.md`](docs/lxc-deployment.md).
-High availability: see [`ha/`](ha/).
+High availability: see [`ha/`](ha/) — a keepalived VIP pair with failure modes documented.
+
+The VIP is an address that *moves* to whichever node is healthy, not a proxy. Failover is
+~3s for node loss and ~4s for a dead resolver process. The one case a VIP cannot cover is
+both nodes being down, so hand out a second DNS server via DHCP:
+`DNS servers: <VIP>, <node A physical IP>`.
 
 ---
 

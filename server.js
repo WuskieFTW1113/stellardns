@@ -68,6 +68,7 @@ const DEFAULT_CONFIG = {
   ],
   blocklistRefreshHours: 24,
   blockedResponse: 'nxdomain',    // 'nxdomain' | 'zeroip'
+  healthName: 'health.stellardns',   // always answered locally; used by HA health checks
   dohCanaryNxdomain: true,        // serve use-application-dns.net as NXDOMAIN (disables Firefox DoH)
   clientAcl: [],                  // e.g. ['192.168.0.0/16','10.0.0.0/8'] — empty = allow all
   rateLimitPerClientQps: 0,       // 0 = disabled
@@ -445,7 +446,7 @@ function buildLocalIndex() {
   const names = [];
   for (const r of (config.localRecords || [])) {
     if (!r || !r.name) continue;
-    const n = String(r.name).toLowerCase().replace(/\.$/, '');
+    const n = normZone(r.name);
     const t = String(r.type || 'A').toUpperCase();
     let e = idx.get(n);
     if (!e) { e = { byType: new Map(), all: [] }; idx.set(n, e); names.push(n); }
@@ -898,11 +899,17 @@ function withoutClient(ups, clientIP) {
   return (ups || []).filter(u => normAddr(u.address) !== c);
 }
 
+// Normalizes a user-entered domain/zone string: trims whitespace, strips a leading
+// "." (people naturally type ".internal" meaning the zone "internal") and a trailing
+// dot (FQDN notation). Previously several sites only stripped the trailing dot, so a
+// leading-dot entry like ".internal" silently matched nothing forever.
+function normZone(s) { return String(s || '').trim().toLowerCase().replace(/^\.+/, '').replace(/\.+$/, ''); }
+
 // ---------------------------------------------------------------- reverse DNS (PTR) for private ranges
 // AD-joined machines rely on reverse lookups. A PTR for an RFC1918 address must go to the internal
 // resolver (DC or router), never to a public upstream — that both leaks and fails.
 function ptrIsPrivate(qname) {
-  const n = String(qname).toLowerCase().replace(/\.$/, '');
+  const n = normZone(qname);
   if (n.endsWith('.in-addr.arpa')) {
     const parts = n.slice(0, -'.in-addr.arpa'.length).split('.').reverse().map(Number);
     if (parts.some(isNaN)) return false;
@@ -945,7 +952,7 @@ function buildCondForwarders() {
   invalidateCategoryIndex();
   invalidateLocalIndex();
   condForwarders = (config.conditionalForwarders || []).map(cf => ({
-    zone: String(cf.zone).toLowerCase().replace(/\.$/, ''),
+    zone: normZone(cf.zone),
     upstreams: (cf.upstreams || []).map(u => new Upstream({ ...u, internal: true }))
   }));
 }
@@ -960,7 +967,7 @@ function matchConditionalForwarder(qname) {
 }
 function isInternalZone(qname) {
   for (const z of (config.internalZones || [])) {
-    const zz = String(z).toLowerCase().replace(/\.$/, '');
+    const zz = normZone(z);
     if (qname === zz || qname.endsWith('.' + zz)) return zz;
   }
   return null;
@@ -975,7 +982,7 @@ const inflight = new Map(); // key -> Promise
 // authoritative server directly from us. When config.qnameMinimization is false we note it in
 // stats so the behavior is observable rather than silent. The helper below backs the internal
 // iterative path used for conditional forwarders where we DO control label exposure.
-function qnameLabels(name){ return String(name).replace(/\.$/,'').split('.').filter(Boolean); }
+function qnameLabels(name){ return normZone(name).split('.').filter(Boolean); }
 function minimalLabel(name, depth){
   const l = qnameLabels(name);
   if (depth >= l.length) return name;
@@ -1381,6 +1388,19 @@ async function handleQuery(msg, meta) {
   if (!aclAllows(meta.client)) { stats.aclDenied++; return respond('REFUSED', [], 'acl'); }
   if (rateLimited(meta.client)) { stats.rateLimited++; return respond('REFUSED', [], 'ratelimit'); }
 
+  // 0.5) Built-in health name for HA / monitoring. Answered locally, never forwarded,
+  // never cached. VRRP health checks must test "is this resolver alive", NOT "can it
+  // reach the internet" — otherwise a WAN outage fails the check on every node at once
+  // and the VIP disappears while the resolvers are still perfectly able to serve cache
+  // and LANCache rewrites.
+  if (q.name === (config.healthName || 'health.stellardns')) {
+    if (q.type === 'A')    return respond('NOERROR', [{ name: q.name, type: 'A',    ttl: 0, data: '127.0.0.1' }], 'health');
+    if (q.type === 'AAAA') return respond('NOERROR', [{ name: q.name, type: 'AAAA', ttl: 0, data: '::1' }], 'health');
+    if (q.type === 'TXT')  return respond('NOERROR', [{ name: q.name, type: 'TXT', ttl: 0,
+      data: `ok workers=${WORKER_COUNT} cache=${cache.size} up=${Math.floor((Date.now()-startTime)/1000)}s` }], 'health');
+    return respond('NOERROR', [], 'health');   // NODATA for other types, still proves liveness
+  }
+
   // 0) DoH canary — tell Firefox to use us, not its built-in DoH
   if (config.dohCanaryNxdomain && (q.name === 'use-application-dns.net' || q.name.endsWith('.use-application-dns.net'))) {
     return respond('NXDOMAIN', [], 'doh-canary');
@@ -1399,12 +1419,12 @@ async function handleQuery(msg, meta) {
 
   // 1.4) Private reverse lookups (PTR) — send to internal resolvers, never public
   if (q.type === 'PTR' && ptrIsPrivate(q.name)) {
-    // Loop guard: a peer resolver asking US for a private PTR must get an answer or a clean
-    // NXDOMAIN — never a bounce back to itself.
-    if (isPeerResolver(meta.client)) {
+    // Loop guard: drop only the asker from the upstream list. A peer forwarding client
+    // queries to us must still get real answers from our OTHER reverse resolvers.
+    const rUps = withoutClient(reverseUpstreams(), meta.client);
+    if (!rUps.length && isPeerResolver(meta.client)) {
       return respond('NXDOMAIN', [], 'ptr-loopguard', edeOption(EDE.NOT_SUPPORTED, 'no reverse data here'));
     }
-    const rUps = withoutClient(reverseUpstreams(), meta.client);
     const rKey = cacheKey(q);
     const rHit = cacheGet(rKey);
     if (rHit && !rHit.stale) { stats.cacheHits++; return respond(rHit.entry.rcode, buildAnswers(q, rHit.entry), 'cache-ptr'); }
@@ -1446,13 +1466,18 @@ async function handleQuery(msg, meta) {
     // (normally the router/firewall — OPNsense Unbound is authoritative for names like
     // speedtest.internal). Only if that has nothing do we NXDOMAIN. We still never send
     // internal names to PUBLIC upstreams.
-    // Loop guard: if the asker is itself one of our forwarders (router/DC), answering
-    // "I don't know" immediately is correct — bouncing back would loop.
-    if (isPeerResolver(meta.client)) {
+    // Loop guard, done precisely: drop only the resolver that is ASKING us from the
+    // upstream list, so we can never bounce a query straight back to its sender. We must
+    // NOT refuse outright just because the sender happens to be a peer — when the router
+    // forwards client queries to us, every query arrives sourced from the router, and a
+    // blanket refusal breaks internal resolution for the whole network.
+    const ifUps = withoutClient(internalFallbackUpstreams, meta.client);
+    if (!ifUps.length && isPeerResolver(meta.client)) {
+      // The only fallback we had *is* the asker: nothing left to try, and bouncing back
+      // would loop. "I don't know" is the correct, immediate answer.
       stats.blocked++;
       return respond('NXDOMAIN', [], `internal-loopguard:${internalZone}`, edeOption(EDE.NOT_SUPPORTED, 'internal zone, no record'));
     }
-    const ifUps = withoutClient(internalFallbackUpstreams, meta.client);
     if (ifUps.length) {
       const ikey = cacheKey(q);
       const iHit = cacheGet(ikey);
@@ -1866,8 +1891,8 @@ const webServer = http.createServer(async (req, res) => {
     }
     if (u.pathname === '/api/forwarders' && req.method === 'POST') {
       const b = await readBody(req);
-      if (Array.isArray(b.conditionalForwarders)) config.conditionalForwarders = b.conditionalForwarders;
-      if (Array.isArray(b.internalZones)) config.internalZones = b.internalZones;
+      if (Array.isArray(b.conditionalForwarders)) config.conditionalForwarders = b.conditionalForwarders.map(cf => ({ ...cf, zone: normZone(cf.zone) }));
+      if (Array.isArray(b.internalZones)) config.internalZones = b.internalZones.map(normZone).filter(Boolean);
       if ('internalFallback' in b) config.internalFallback = b.internalFallback;
       if (Array.isArray(b.reverseForwarders)) config.reverseForwarders = b.reverseForwarders;
       saveConfig(); buildCondForwarders(); buildInternalFallback();
