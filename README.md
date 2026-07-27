@@ -86,7 +86,7 @@ Static/reserved hosts are a good fit; dynamic clients are not.
 ## Install
 
 ```sh
-git clone https://github.com/YOURNAME/stellardns.git
+git clone https://github.com/WuskieFTW1113/stellardns.git
 cd stellardns
 sudo ./install.sh
 ```
