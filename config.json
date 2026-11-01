@@ -1,0 +1,177 @@
+{
+  "dns": {
+    "host": "0.0.0.0",
+    "host6": "::",
+    "port": 53,
+    "tcp": true,
+    "ednsUdpSize": 1232
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 5380,
+    "apiToken": "8e9f3dcd3dbee4bb66a8b4745e45d0fcc06543493a7a366d"
+  },
+  "upstreams": [
+    {
+      "name": "cloudflare",
+      "address": "1.1.1.1",
+      "port": 53
+    },
+    {
+      "name": "quad9",
+      "address": "9.9.9.9",
+      "port": 53
+    }
+  ],
+  "race": false,
+  "ecs": false,
+  "ecsPrefixV4": 24,
+  "ecsPrefixV6": 56,
+  "qnameMinimization": true,
+  "happyEyeballs": false,
+  "filterAAAA": false,
+  "workers": 0,
+  "dnssec": "passthrough",
+  "dnssecStrictDomains": [],
+  "rebindingProtection": true,
+  "rebindingAllow": [],
+  "cache": {
+    "maxEntries": 150000,
+    "maxHeapMB": 512,
+    "minTtl": 5,
+    "maxTtl": 86400,
+    "negMaxTtl": 900,
+    "serveStale": true,
+    "serveStaleMaxAge": 259200,
+    "prefetch": true,
+    "prefetchWindow": 10,
+    "snapshotIntervalSec": 300
+  },
+  "circuit": {
+    "windowSize": 20,
+    "failThreshold": 0.5,
+    "probeIntervalMs": 3000
+  },
+  "timeoutMs": {
+    "min": 250,
+    "max": 3000,
+    "initial": 800
+  },
+  "log": {
+    "ringSize": 2000,
+    "file": true,
+    "maxFileBytes": 52428800,
+    "keepFiles": 3
+  },
+  "blockAllowlist": [],
+  "blocklists": [],
+  "blocklistRefreshHours": 24,
+  "blockedResponse": "nxdomain",
+  "sinkholeIP": "",
+  "sinkholeIPv6": "",
+  "blockingPausedUntil": 0,
+  "clientNames": {},
+  "healthName": "health.stellardns",
+  "dohCanaryNxdomain": true,
+  "clientAcl": [],
+  "rateLimitPerClientQps": 0,
+  "categories": {
+    "steam": {
+      "enabled": true,
+      "target": "",
+      "target6": "",
+      "domains": [
+        "lancache.steamcontent.com",
+        "steamcontent.com",
+        "content.steampowered.com"
+      ]
+    },
+    "epicgames": {
+      "enabled": true,
+      "target": "",
+      "target6": "",
+      "domains": [
+        "epicgames-download1.akamaized.net",
+        "download.epicgames.com",
+        "download2.epicgames.com",
+        "download3.epicgames.com",
+        "download4.epicgames.com",
+        "fastly-download.epicgames.com"
+      ]
+    },
+    "blizzard": {
+      "enabled": true,
+      "target": "",
+      "target6": "",
+      "domains": [
+        "level3.blizzard.com",
+        "edgecast.blizzard.com",
+        "blizzard.gcdn.cloudn.co.kr",
+        "cdn.blizzard.com",
+        "us.cdn.blizzard.com",
+        "eu.cdn.blizzard.com"
+      ]
+    },
+    "riot": {
+      "enabled": true,
+      "target": "",
+      "target6": "",
+      "domains": [
+        "l3cdn.riotgames.com",
+        "worldwide.l3cdn.riotgames.com",
+        "riotgamespatcher-a.akamaihd.net"
+      ]
+    },
+    "wsus": {
+      "enabled": true,
+      "target": "",
+      "target6": "",
+      "domains": [
+        "windowsupdate.com",
+        "dl.delivery.mp.microsoft.com",
+        "tlu.dl.delivery.mp.microsoft.com"
+      ]
+    },
+    "nintendo": {
+      "enabled": true,
+      "target": "",
+      "target6": "",
+      "domains": [
+        "ccs.cdn.wup.shop.nintendo.net",
+        "cdn.nintendo.net"
+      ]
+    },
+    "sony": {
+      "enabled": true,
+      "target": "",
+      "target6": "",
+      "domains": [
+        "gs2.ww.prod.dl.playstation.net",
+        "gs2.sonycoment.loris-e.llnwd.net"
+      ]
+    },
+    "xboxlive": {
+      "enabled": true,
+      "target": "",
+      "target6": "",
+      "domains": [
+        "assets1.xboxlive.com",
+        "assets2.xboxlive.com",
+        "xvcf1.xboxlive.com",
+        "xvcf2.xboxlive.com"
+      ]
+    }
+  },
+  "internalZones": [],
+  "conditionalForwarders": [],
+  "internalFallback": "auto",
+  "internalTimeoutMs": 700,
+  "selfRecord": true,
+  "forwardLoopGuard": true,
+  "loopPeers": [],
+  "reverseForwarders": [],
+  "rebindingAllowlist": [],
+  "dnsCookies": true,
+  "failoverJitter": true,
+  "localRecords": []
+}

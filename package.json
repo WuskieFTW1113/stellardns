@@ -1,7 +1,7 @@
 {
   "name": "stellardns",
-  "version": "20.0.0",
-  "description": "A fast, gaming-oriented DNS server with LANCache rewrites, blocklists, DoT/DoH, and a web console",
+  "version": "24.0.0",
+  "description": "A fast gaming-oriented DNS resolver with hedged upstreams, configurable sinkhole mode, client policies, analytics, and web console",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -30,7 +30,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOURNAME/stellardns.git"
+    "url": "git+https://github.com/WuskieFTW1113/stellardns.git"
   },
   "files": [
     "server.js",

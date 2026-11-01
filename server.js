@@ -61,13 +61,31 @@ const DEFAULT_CONFIG = {
   },
   circuit: { windowSize: 20, failThreshold: 0.5, probeIntervalMs: 3000 },
   timeoutMs: { min: 250, max: 3000, initial: 800 }, // adaptive SRTT bounds
+  // Hedged requests: start the best forwarder, and if it has not answered within
+  // hedgeDelayMs start the next one too — first usable answer wins. This is what stops a
+  // slow-but-alive upstream from adding its full latency to every single query.
+  hedge: true,
+  hedgeDelayMs: 60,
+  // Internal/private names (DHCP leases, Bonjour, AD) change address when a device
+  // reconnects. Serving them stale is how a phone resolves its own name to its previous
+  // address and concludes the name is taken ("John's iPhone" -> "John's iPhone (192)").
+  internalTtlCap: 30,             // seconds; clamp TTL for internal/private answers
+  internalServeStale: false,      // never serve stale data for internal names
   log: { ringSize: 2000, file: true, maxFileBytes: 50 * 1024 * 1024, keepFiles: 3 },
+  blockAllowlist: [
+    // Domains exempted from every blocklist, regardless of which list matches them.
+    // Populated from the console (Blocking tab) or by clicking "unblock" in the query log.
+  ],
   blocklists: [
     // AdGuard/hosts format URLs. Example:
     // { name: 'hagezi-pro', url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt', enabled: true }
   ],
   blocklistRefreshHours: 24,
-  blockedResponse: 'nxdomain',    // 'nxdomain' | 'zeroip'
+  blockedResponse: 'nxdomain',    // 'nxdomain' | 'zeroip' | 'sinkhole' | 'blockpage'
+  sinkholeIP: '',                // IPv4 address for sinkhole answers; configure to this host or a local sinkhole endpoint
+  sinkholeIPv6: '',              // optional IPv6 sinkhole address
+  blockingPausedUntil: 0,        // Unix ms timestamp; 0 = not paused
+  clientNames: {},               // client IP -> display name
   healthName: 'health.stellardns',   // always answered locally; used by HA health checks
   dohCanaryNxdomain: true,        // serve use-application-dns.net as NXDOMAIN (disables Firefox DoH)
   clientAcl: [],                  // e.g. ['192.168.0.0/16','10.0.0.0/8'] — empty = allow all
@@ -180,7 +198,11 @@ function ensureAdmin() {
   const pw = crypto.randomBytes(9).toString('base64').replace(/[/+=]/g, '').slice(0, 12);
   users.admin = { ...hashPw(pw), role: 'admin' };
   saveUsers(users);
-  console.log(`[auth] created default user 'admin' / '${pw}'  (change it in the UI)`);
+  // Never print the password: stdout goes to journald/syslog, where it persists for anyone
+  // with log access. Write it 0600 next to the data and log only where to find it.
+  const pwFile = path.join(DATA_DIR, '.admin-password');
+  try { fs.writeFileSync(pwFile, pw + '\n', { mode: 0o600 }); fs.chmodSync(pwFile, 0o600); } catch {}
+  console.log(`[auth] created user 'admin' with a generated password -> ${pwFile} (mode 600)`);
 }
 const sessions = new Map(); // sid -> { user, exp }
 const SESSION_MS = 12 * 3600 * 1000;
@@ -251,6 +273,10 @@ const stats = {
   coalesced: 0, prefetches: 0, tcpQueries: 0, rateLimited: 0, aclDenied: 0,
   perCategory: {}
 };
+// Instantaneous rate, sampled once a second. /api/stats used to make clients guess it from
+// their own polling deltas, which is wrong after a reload and misses short bursts.
+let qpsNow = 0, _qpsPrev = 0;
+setInterval(() => { qpsNow = Math.max(0, stats.queries - _qpsPrev); _qpsPrev = stats.queries; }, 1000);
 
 // ---------------------------------------------------------------- query log ring
 const queryLog = [];
@@ -433,8 +459,33 @@ function matchCategory(qname) {
   }
   return null;
 }
+// Allowlist: domains explicitly exempted from blocking, regardless of which blocklist
+// they match. Kept as its own Set, rebuilt only when the allowlist config changes — same
+// pattern as blockSet, so this costs nothing extra on the hot path.
+let allowSet = new Set();
+function buildAllowIndex() {
+  allowSet = new Set((config.blockAllowlist || []).map(d => String(d).toLowerCase().trim()).filter(Boolean));
+}
+// Set variant of firstSuffixMatch: no closure allocation. isBlocked() runs on every query
+// and used to build two arrow functions per call just to test set membership.
+function suffixInSet(name, set) {
+  if (set.size === 0) return null;
+  if (set.has(name)) return name;
+  for (let i = 0; i < name.length; i++) {
+    if (name.charCodeAt(i) === 46 /* '.' */) {
+      const s = name.slice(i + 1);
+      if (s.indexOf('.') === -1) break;   // bare TLD: never match
+      if (set.has(s)) return s;
+    }
+  }
+  return null;
+}
+function isAllowed(qname) {
+  return allowSet.size > 0 ? suffixInSet(qname, allowSet) : null;
+}
 function isBlocked(qname) {
-  return firstSuffixMatch(qname, s => blockSet.has(s));
+  if (isAllowed(qname)) return null;   // allowlist wins over every blocklist, unconditionally
+  return suffixInSet(qname, blockSet);
 }
 // Local records compiled once into name -> { byType, all }. The previous version ran two
 // Array.filter() calls (two allocations) plus a toLowerCase() per record on EVERY query,
@@ -471,12 +522,25 @@ function matchLocal(qname, qtype) {
 const cache = new Map();
 function cacheKey(q) { return `${q.name.toLowerCase()}|${q.type}`; }
 
+// Names that describe a device on this network rather than a public host. Their answers must
+// expire quickly and must never be served stale: RFC 8767 serve-stale is for upstream
+// outages, not for "the phone moved to a different DHCP lease".
+function isInternalName(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n) return false;
+  if (isInternalZone(n)) return true;
+  if (matchConditionalForwarder(n)) return true;
+  if (n.endsWith('.in-addr.arpa') || n.endsWith('.ip6.arpa')) return ptrIsPrivate(n);
+  return false;
+}
+
 function cacheGet(key) {
   const e = cache.get(key);
   if (!e) return null;
   const now = Date.now();
   if (now <= e.expiresAt) { e.hits++; return { entry: e, stale: false }; }
-  if (config.cache.serveStale && now - e.expiresAt < config.cache.serveStaleMaxAge * 1000) {
+  const staleAllowed = config.cache.serveStale && (config.internalServeStale === true || !e.internal);
+  if (staleAllowed && now - e.expiresAt < config.cache.serveStaleMaxAge * 1000) {
     return { entry: e, stale: true };
   }
   cache.delete(key);
@@ -486,7 +550,10 @@ function cacheSet(key, rcode, answers, ttl, ad) {
   // HARD RULE: only NOERROR-with-data, NODATA, and NXDOMAIN are cacheable.
   // SERVFAIL / REFUSED / timeouts are link-state, not facts — never stored.
   if (rcode !== 'NOERROR' && rcode !== 'NXDOMAIN') return;
+  const name = key.slice(0, key.indexOf('|'));
+  const internal = isInternalName(name);
   let t = Math.max(config.cache.minTtl, Math.min(ttl, config.cache.maxTtl));
+  if (internal) t = Math.min(t, Math.max(5, Number(config.internalTtlCap) || 30));
   if (rcode === 'NXDOMAIN' || (rcode === 'NOERROR' && (!answers || !answers.length))) {
     t = Math.min(t, config.cache.negMaxTtl);
   }
@@ -504,12 +571,13 @@ function cacheSet(key, rcode, answers, ttl, ad) {
     }
   }
   if (cache.size >= config.cache.maxEntries) {
-    // cheap eviction: drop ~1% oldest-inserted
-    const n = Math.ceil(config.cache.maxEntries / 100);
-    const keys = [...cache.keys()].slice(0, n);
-    for (const k of keys) cache.delete(k);
+    // Evict ~1% of the oldest-inserted entries. The old version built
+    // [...cache.keys()] — an array holding every key in the cache — on every insert once
+    // the cache was full: tens of MB of garbage per query burst at 150k entries.
+    let n = Math.ceil(config.cache.maxEntries / 100);
+    for (const k of cache.keys()) { cache.delete(k); if (--n <= 0) break; }
   }
-  cache.set(key, { rcode, answers: answers || [], ad: !!ad, expiresAt: Date.now() + t * 1000, insertedAt: Date.now(), hits: 0 });
+  cache.set(key, { rcode, answers: answers || [], ad: !!ad, internal, expiresAt: Date.now() + t * 1000, insertedAt: Date.now(), hits: 0 });
 }
 
 // snapshot persistence — instant warm restart
@@ -689,6 +757,41 @@ function dohQuery(up, packet, timeoutMs) {
   });
 }
 
+// ---------------------------------------------------------------- upstream UDP socket pool
+// One long-lived socket per address family instead of socket()/sendto()/recv()/close()
+// for every cache miss. The old path cost four syscalls and two allocations per upstream
+// query; replies are now matched by (address, port, DNS id) and the id is rewritten per
+// query so concurrent lookups to the same forwarder stay independent.
+const udpPool = new Map();          // 'udp4'|'udp6' -> { sock, dead, pending: Map<key, waiter> }
+function _normIp(a) { return String(a || '').replace(/^::ffff:/i, '').toLowerCase(); }
+function udpPoolGet(family) {
+  let e = udpPool.get(family);
+  if (e && !e.dead) return e;
+  const sock = dgram.createSocket(family);
+  e = { sock, dead: false, pending: new Map() };
+  sock.on('message', (msg, rinfo) => {
+    let id;
+    try { id = msg.readUInt16BE(0); } catch { return; }
+    const key = `${_normIp(rinfo.address)}|${rinfo.port}|${id}`;
+    const w = e.pending.get(key);
+    if (!w) return;
+    e.pending.delete(key);
+    clearTimeout(w.timer);
+    w.settle(msg);
+  });
+  sock.on('error', err => {
+    console.error('[upstream/udp]', err.message);
+    if (e.dead) return;
+    e.dead = true; udpPool.delete(family);
+    for (const [, w] of e.pending) { clearTimeout(w.timer); w.reject(err); }
+    e.pending.clear();
+    try { sock.close(); } catch {}
+  });
+  sock.on('close', () => { e.dead = true; if (udpPool.get(family) === e) udpPool.delete(family); });
+  udpPool.set(family, e);
+  return e;
+}
+
 function upstreamQuery(up, packet) {
   // encrypted transports share the same SRTT / circuit-breaker accounting as UDP
   if (up.protocol === 'tls' || up.protocol === 'https') {
@@ -705,26 +808,61 @@ function upstreamQuery(up, packet) {
   }
   return new Promise((resolve, reject) => {
     // socket family must match the upstream address, or IPv6 forwarders/DCs can never be reached
-    const sock = dgram.createSocket(net.isIPv6(up.address) ? 'udp6' : 'udp4');
+    let pool;
+    try { pool = udpPoolGet(net.isIPv6(up.address) ? 'udp6' : 'udp4'); }
+    catch (e) { up.record(false); return reject(e); }
+    const addrKey = `${_normIp(up.address)}|${up.port}|`;
+    let id = 0, tries = 0;
+    do { id = Math.floor(Math.random() * 65535); tries++; } while (pool.pending.has(addrKey + id) && tries < 8);
+    const key = addrKey + id;
+    const pkt = Buffer.from(packet);
+    pkt.writeUInt16BE(id, 0);      // unique per in-flight query so replies can be matched
     const started = Date.now();
-    const to = setTimeout(() => { sock.close(); up.record(false); reject(new Error('timeout')); }, up.timeout());
-    sock.once('message', msg => {
-      clearTimeout(to); sock.close();
-      const rtt = Date.now() - started;
-      try {
-        const resp = dnsPacket.decode(msg);
-        if (resp.rcode === 'SERVFAIL' || resp.rcode === 'REFUSED') {
-          up.record(false); return reject(new Error(resp.rcode));
-        }
+    const timer = setTimeout(() => {
+      pool.pending.delete(key);
+      up.record(false);
+      reject(new Error('timeout'));
+    }, up.timeout());
+    pool.pending.set(key, {
+      timer, reject,
+      settle: msg => {
+        const rtt = Date.now() - started;
+        let resp;
+        try { resp = dnsPacket.decode(msg); } catch (e) { up.record(false); return reject(e); }
+        if (resp.rcode === 'SERVFAIL' || resp.rcode === 'REFUSED') { up.record(false); return reject(new Error(resp.rcode)); }
         up.record(true, rtt);
         resolve(resp);
-      } catch (e) { up.record(false); reject(e); }
+      }
     });
-    sock.once('error', e => { clearTimeout(to); try { sock.close(); } catch {} up.record(false); reject(e); });
     up.sent++;
-    sock.send(packet, up.port, up.address);
+    try { pool.sock.send(pkt, up.port, up.address); }
+    catch (e) { clearTimeout(timer); pool.pending.delete(key); up.record(false); reject(e); }
   });
 }
+
+// Warm encrypted upstreams so the first client query after a restart does not pay for a TLS
+// handshake. A cold DoH forwarder that answers in 260ms often answers in 30ms once its
+// socket is established — that difference is most of "DNS feels slow".
+function warmUpstreams() {
+  for (const up of upstreams) {
+    try {
+      if (up.protocol === 'tls') {
+        dotConnect(up);                       // opens if absent, reuses if present
+      } else if (up.protocol === 'https') {
+        const opts = { host: up.address, port: up.port, path: up.path, method: 'HEAD',
+                       agent: dohAgent(up), timeout: 4000 };
+        if (up.hostname) { opts.servername = up.hostname; opts.headers = { host: up.hostname }; }
+        else opts.rejectUnauthorized = false;
+        const req = https.request(opts);
+        req.on('error', () => {});
+        req.on('timeout', () => req.destroy());
+        req.end();
+      }
+    } catch {}
+  }
+}
+try { warmUpstreams(); } catch {}
+setInterval(warmUpstreams, 60000).unref();
 
 // background prober re-closes open circuits
 setInterval(async () => {
@@ -817,14 +955,24 @@ function registerSelfRecord() {
     }
   }
   config.localRecords = config.localRecords || [];
-  let added = 0;
+  let changed = 0;
   for (const z of zones) {
     const fqdn = `${host}.${z}`;
-    const has = t => config.localRecords.some(r => r.name.toLowerCase() === fqdn && r.type.toUpperCase() === t);
-    if (v4 && !has('A'))   { config.localRecords.push({ name: fqdn, type: 'A',    data: v4, ttl: 3600 }); added++; }
-    if (v6 && !has('AAAA')){ config.localRecords.push({ name: fqdn, type: 'AAAA', data: v6, ttl: 3600 }); added++; }
+    const upsert = (type, data) => {
+      if (!data) return;
+      const same = config.localRecords.filter(r => r.name.toLowerCase() === fqdn && r.type.toUpperCase() === type);
+      if (!same.length) { config.localRecords.push({ name: fqdn, type, data, ttl: 3600, self: true }); changed++; return; }
+      // Fill-the-gap was wrong the moment the host's address changed: the old record survived
+      // and <host>.<zone> kept answering with an address that is no longer ours.
+      if (same[0].data !== data) { same[0].data = data; same[0].ttl = 3600; changed++; }
+      for (let i = same.length - 1; i > 0; i--) config.localRecords.splice(config.localRecords.indexOf(same[i]), 1);
+    };
+    upsert('A', v4); upsert('AAAA', v6);
   }
-  if (added) { saveConfig({ noBroadcast: true }); invalidateLocalIndex(); console.log(`[self] registered ${host}.{${zones.join(',')}} -> ${v4 || ''} ${v6 || ''}`); }
+  if (changed) {
+    saveConfig({ noBroadcast: true }); invalidateLocalIndex(); cache.clear();
+    console.log(`[self] ${changed} record(s) synced for ${host}.{${zones.join(',')}} -> ${v4 || ''} ${v6 || ''}`);
+  }
 }
 
 // Probe internal resolvers at boot so a wrong auto-detected gateway is obvious, not silent.
@@ -951,6 +1099,7 @@ function buildCondForwarders() {
   invalidatePeerCache();
   invalidateCategoryIndex();
   invalidateLocalIndex();
+  rebuildInternalZones();
   condForwarders = (config.conditionalForwarders || []).map(cf => ({
     zone: normZone(cf.zone),
     upstreams: (cf.upstreams || []).map(u => new Upstream({ ...u, internal: true }))
@@ -965,10 +1114,18 @@ function matchConditionalForwarder(qname) {
   }
   return best;
 }
+// Normalized zone list, rebuilt whenever configuration changes. isInternalZone() runs for
+// every query that is not a cache hit, and normZone() allocated a fresh lowercased string
+// for each configured zone on every call.
+let internalZoneList = [];
+function rebuildInternalZones() {
+  internalZoneList = (config.internalZones || []).map(normZone).filter(Boolean);
+}
 function isInternalZone(qname) {
-  for (const z of (config.internalZones || [])) {
-    const zz = normZone(z);
-    if (qname === zz || qname.endsWith('.' + zz)) return zz;
+  for (let i = 0; i < internalZoneList.length; i++) {
+    const z = internalZoneList[i];
+    if (qname === z) return z;
+    if (qname.length > z.length && qname.charCodeAt(qname.length - z.length - 1) === 46 && qname.endsWith(z)) return z;
   }
   return null;
 }
@@ -989,6 +1146,40 @@ function minimalLabel(name, depth){
   return l.slice(l.length - depth - 1).join('.');
 }
 
+// Staggered race across forwarders: start one, launch the next if it has not answered within
+// delayMs, settle on the first usable reply. Capped at two in flight so three configured
+// forwarders do not triple upstream traffic.
+function hedgedRun(order, runner, delayMs, maxParallel = 2) {
+  return new Promise((resolve, reject) => {
+    let started = 0, inFlight = 0, failed = 0, finished = false, timer = null;
+    const arm = () => {
+      if (finished || started >= order.length || inFlight >= maxParallel) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(launch, delayMs);
+      if (timer.unref) timer.unref();
+    };
+    const launch = () => {
+      timer = null;
+      if (finished || started >= order.length || inFlight >= maxParallel) return;
+      const up = order[started++];
+      inFlight++;
+      runner(up).then(resp => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        resolve(resp);
+      }).catch(() => {
+        inFlight--; failed++;
+        if (finished) return;
+        if (failed >= order.length) { finished = true; if (timer) clearTimeout(timer); reject(new Error('all upstreams failed')); return; }
+        arm();
+      });
+      arm();
+    };
+    launch();
+  });
+}
+
 async function resolveUpstream(question, forcedUpstreams, clientIP) {
   const key = cacheKey(question) + (forcedUpstreams ? '|cf' : '');
   if (inflight.has(key)) { stats.coalesced++; return inflight.get(key); }
@@ -1002,28 +1193,31 @@ async function resolveUpstream(question, forcedUpstreams, clientIP) {
         options: (() => { const o = up ? [cookieOption(up)] : []; if (config.ecs === true) { const e = ecsOption(clientIP); if (e) o.push(e); } if (config.dnsCookies === false && up) o.shift(); return o; })() }]
     });
     const order = forcedUpstreams && forcedUpstreams.length ? [...forcedUpstreams].sort((a,b)=>a.srtt-b.srtt) : pickUpstreams();
-    if (config.race && order.length >= 2) {
-      try {
-        const r = await Promise.any([upstreamQuery(order[0], mkPacket(order[0])), upstreamQuery(order[1], mkPacket(order[1]))]);
-        if (config.caseRandomization === false || !r.questions || !r.questions[0] || r.questions[0].name === wireName) return r;
-      } catch {} // fall through to sequential over the rest
-    }
     const verify = resp => {
       // 0x20 verification: upstream must echo our exact mixed-case qname or the reply is suspect
       if (config.caseRandomization !== false && resp.questions && resp.questions[0] &&
           resp.questions[0].name !== wireName) throw new Error('0x20 case mismatch - possible spoof');
       return resp;
     };
+    const runOne = up => upstreamQuery(up, mkPacket(up)).then(verify)
+      .then(resp => { storeServerCookie(up, resp); return resp; });
+
+    // The old path sorted by SRTT and awaited each forwarder in turn, so one that was merely
+    // slow (not dead) added its full latency to every query, plus the jittered retry delay.
+    // Now a second forwarder is launched once the first has been silent for hedgeDelayMs and
+    // the first usable answer wins. race:true keeps its old meaning — launch both at once.
+    const hedged = config.race === true || config.hedge !== false;
+    if (hedged && order.length >= 2) {
+      try {
+        return await hedgedRun(order, runOne, config.race === true ? 0 : Math.max(10, Number(config.hedgeDelayMs) || 60));
+      } catch { /* every forwarder failed — fall through for the real error */ }
+    }
     let lastErr = new Error('no upstreams');
     let first = true;
     for (const up of order) {
       if (!first) await new Promise(r => setTimeout(r, Math.random() * 60)); // jittered failover: no retry storms
       first = false;
-      try {
-        const resp = verify(await upstreamQuery(up, mkPacket(up)));
-        storeServerCookie(up, resp);
-        return resp;
-      } catch (e) { lastErr = e; }
+      try { return await runOne(up); } catch (e) { lastErr = e; }
     }
     throw lastErr;
   })().finally(() => inflight.delete(key));
@@ -1124,7 +1318,8 @@ function policyForClient(ip) {
 }
 
 // ---------------------------------------------------------------- block page server
-// blockedResponse: 'nxdomain' | 'zeroip' | 'blockpage' (rewrites A to this host's IP; HTTP below serves the reason)
+// blockedResponse: 'nxdomain' | 'zeroip' | 'blockpage' | 'sinkhole'. Sinkhole is a configurable DNS answer;
+// HTTP compatibility responses are served by the local endpoint below and can be fronted by a local proxy.
 const blockReasons = new Map(); // domain -> { reason, at } (recent blocks, for page lookup)
 const BLOCK_REASONS_MAX = 2000;
 function noteBlock(domain, reason) {
@@ -1140,9 +1335,135 @@ function noteBlock(domain, reason) {
   }
 }
 let blockPageServer = null;
+let stubPort80 = null;
+let _stubIp = null, _stubIpAt = 0;
+
+function isPrivateV4(ip) {
+  const p = String(ip || '').split('.').map(Number);
+  if (p.length !== 4 || p.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  if (p[0] === 10) return true;
+  if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
+  if (p[0] === 192 && p[1] === 168) return true;
+  return false;
+}
+// Bridges, tunnels and overlay VPNs all have IPv4 addresses that clients cannot reach. A
+// Tailscale (100.64/10) or docker0 (172.17.0.1) address would otherwise win the scan.
+const VIRTUAL_IFACE = /(docker|veth|virbr|br-|tun|tap|tailscale|zt|wg|vmnet|vbox|hyper-?v)/i;
+let _routedIp = null, _routedAt = 0;
+
+// Ask the kernel which source address it would use for the internet. This is the address
+// clients actually reach, and it costs one UDP connect (no packets are sent).
+function probeRoutedIP() {
+  try {
+    const s = dgram.createSocket('udp4');
+    s.on('error', () => { try { s.close(); } catch {} });
+    s.connect(53, '1.1.1.1', () => {
+      let a = null;
+      try { a = s.address().address; } catch {}
+      try { s.close(); } catch {}
+      if (a && isPrivateV4(a)) { _routedIp = a; _routedAt = Date.now(); _stubIp = a; _stubIpAt = Date.now(); }
+    });
+  } catch {}
+}
+
+// Zero-config sinkhole address: this resolver's own LAN address, which is exactly where the
+// stub listener lives. Re-detected periodically so a DHCP move does not silently break it.
+function autoSinkholeIP() {
+  if (_stubIp && Date.now() - _stubIpAt < 60000) return _stubIp;
+  if (_routedIp && Date.now() - _routedAt < 60000) { _stubIp = _routedIp; _stubIpAt = Date.now(); return _stubIp; }
+  let best = null;
+  try {
+    const os = require('os');
+    for (const [name, list] of Object.entries(os.networkInterfaces())) {
+      if (VIRTUAL_IFACE.test(name)) continue;     // docker0, tailscale0, tun0, virbr0 …
+      for (const ni of (list || [])) {
+        if (ni.internal || ni.family !== 'IPv4' || !isPrivateV4(ni.address)) continue;
+        if (!best) best = ni.address;
+      }
+    }
+  } catch {}
+  if (best) { _stubIp = best; _stubIpAt = Date.now(); }
+  return best;
+}
+try { probeRoutedIP(); } catch {}
+setInterval(probeRoutedIP, 60000).unref();
+function sinkholeAddress() { return config.sinkholeIP || autoSinkholeIP() || ''; }
+
+// A 1x1 GIF and PNG: real, decodable images. Returning HTML for an <img> beacon is a
+// one-line detector, so the response has to match what the request asked for.
+const STUB_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+const STUB_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+
+function stubPayload(req) {
+  const url = String(req.url || '/').toLowerCase();
+  const accept = String(req.headers.accept || '').toLowerCase();
+  const ext = (url.split('?')[0].match(/\.([a-z0-9]{2,5})$/) || [])[1] || '';
+  const IMG = ['gif', 'png', 'jpg', 'jpeg', 'webp', 'bmp'];
+  if (IMG.includes(ext) || /^image\//.test(accept)) {
+    if (ext === 'png' || accept.includes('image/png')) return { type: 'image/png', body: STUB_PNG };
+    if (ext === 'webp' || ext === 'jpg' || ext === 'jpeg') return { type: 'image/jpeg', body: STUB_GIF, status: 204 };
+    return { type: 'image/gif', body: STUB_GIF };
+  }
+  if (ext === 'js' || ext === 'mjs' || accept.includes('javascript')) {
+    // Valid, empty script: a <script> tag fires onload, not onerror.
+    return { type: 'application/javascript; charset=utf-8', body: Buffer.from('/* */\n') };
+  }
+  if (ext === 'css') return { type: 'text/css; charset=utf-8', body: Buffer.alloc(0) };
+  if (['mp4', 'webm', 'm4s', 'ts'].includes(ext)) return { type: 'video/mp4', body: Buffer.alloc(0), status: 204 };
+  if (ext === 'json' || accept.includes('application/json') ||
+      /(^|\/)(collect|track|tracker|beacon|pixel|ads?|impression|event|log|metrics?)(\/|$|\?)/.test(url)) {
+    return { type: 'application/json; charset=utf-8', body: Buffer.from(JSON.stringify({
+      ok: true, status: 'ok', data: [], ads: [], slots: [], items: [],
+      impression: { accepted: true, rendered: true, viewable: true }
+    })) };
+  }
+  if (accept.includes('text/html') || ext === '' || ext === 'html' || ext === 'php') {
+    return { type: 'text/html; charset=utf-8', body: Buffer.from('<!doctype html><meta charset="utf-8"><title></title>') };
+  }
+  return { type: 'application/octet-stream', body: Buffer.alloc(0), status: 204 };
+}
+
+// Shape-correct, boring, and identical whether or not the domain is on a blocklist. Nothing
+// in the response says "blocked" — that is the difference between a sinkhole and a block page.
+function stubHandler(req, res) {
+  const origin = req.headers.origin;
+  const h = {
+    'access-control-allow-origin': origin || '*',
+    'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+    'access-control-allow-headers': req.headers['access-control-request-headers'] || 'content-type, accept, authorization, x-requested-with',
+    'access-control-expose-headers': '*',
+    'access-control-max-age': '600',
+    'timing-allow-origin': '*',
+    vary: 'Origin',
+    'cache-control': 'no-store'
+  };
+  if (origin) h['access-control-allow-credentials'] = 'true';   // credentialed fetch() must not fail CORS
+  if (req.method === 'OPTIONS') { res.writeHead(204, h); return res.end(); }
+  req.resume();                                                  // drain bodies so keep-alive survives
+  const r = stubPayload(req);
+  if (r.status === 204) { res.writeHead(204, h); return res.end(); }
+  h['content-type'] = r.type;
+  h['content-length'] = String(r.body.length);
+  res.writeHead(r.status || 200, h);
+  res.end(r.body);
+}
+
+// Port 80 is where a plain-HTTP ad request actually lands, so bind it when the mode is on.
+// A failure here is not fatal (something else may own 80) — the console warns instead.
+function ensureStubPort80() {
+  if (stubPort80 || config.blockedResponse !== 'sinkhole') return;
+  const s = http.createServer((req, res) => stubHandler(req, res));
+  s.on('error', e => {
+    console.warn(`[sinkhole] cannot listen on :80 (${e.code || e.message}) — clients using plain HTTP will not reach the stub`);
+    stubPort80 = null; try { s.close(); } catch {}
+  });
+  s.listen(80, '0.0.0.0', () => { stubPort80 = s; console.log('[sinkhole] stub HTTP on :80'); });
+}
+
 function startBlockPage() {
   const port = config.blockPagePort || 8053;
   blockPageServer = http.createServer((req, res) => {
+    if (config.blockedResponse === 'sinkhole') return stubHandler(req, res);
     const host = (req.headers.host || '').split(':')[0].toLowerCase();
     const info = blockReasons.get(host);
     const reason = info ? info.reason : 'blocked by network policy';
@@ -1156,6 +1477,7 @@ h1{font-size:18px;margin:0 0 8px;color:#ff5d6c}.d{color:#4da3ff}.r{color:#7d8aa5
 <div class="r">Reason: ${reason}</div></div></body></html>`);
   });
   blockPageServer.listen(port, config.dns.host, () => console.log(`[blockpage] serving on :${port}`));
+  ensureStubPort80();
 }
 
 
@@ -1250,6 +1572,29 @@ function startDoh() {
   const srv = https.createServer({ cert: fs.readFileSync(CERT), key: fs.readFileSync(KEY) }, async (req, res) => {
     const u = new URL(req.url, 'https://x');
     if (u.pathname !== '/dns-query') { res.writeHead(404); return res.end(); }
+    // Convenience JSON form (the RFC 8484 wire format is still the default):
+    //   /dns-query?name=example.com&type=A
+    if (u.searchParams.get('name')) {
+      const nm = String(u.searchParams.get('name')).trim().toLowerCase().replace(/\.+$/, '');
+      const ty = String(u.searchParams.get('type') || 'A').toUpperCase().replace(/^TYPE/, '');
+      let qwire;
+      try {
+        qwire = dnsPacket.encode({ type: 'query', id: Math.floor(Math.random() * 65535), flags: dnsPacket.RECURSION_DESIRED,
+          questions: [{ type: /^\d+$/.test(ty) ? Number(ty) : ty, name: nm }],
+          additionals: [{ type: 'OPT', name: '.', udpPayloadSize: config.dns.ednsUdpSize }] });
+      } catch (e) { res.writeHead(400); return res.end(); }
+      const wireOut = await handleQuery(qwire, { client: (req.socket.remoteAddress || '?').replace('::ffff:', ''), proto: 'doh-json', noLog: true });
+      let d = null;
+      try { if (wireOut) d = dnsPacket.decode(wireOut); } catch {}
+      const body = {
+        Status: d ? (d.flags & 0xf) : 2, TC: false, RD: true, RA: true,
+        AD: !!(d && (d.flags & dnsPacket.AUTHENTIC_DATA)), CD: false,
+        Question: [{ name: nm, type: ty }],
+        Answer: d ? (d.answers || []).map(a => ({ name: a.name, type: a.type, TTL: a.ttl, data: a.data })) : []
+      };
+      res.writeHead(200, { 'Content-Type': 'application/dns-json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify(body));
+    }
     let msg = null;
     if (req.method === 'GET' && u.searchParams.get('dns')) {
       msg = Buffer.from(u.searchParams.get('dns').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
@@ -1276,11 +1621,18 @@ function randomizeCase(name) {
   return out;
 }
 function normalizeAnswers(answers) {
-  for (const a of answers) {
+  // Exact duplicate RRs are not harmless: mDNS/Bonjour clients read two identical answers
+  // for one name as an address conflict and rename themselves ("John's iPhone (192)").
+  const seen = new Map();
+  for (const a of answers || []) {
     if (a.name) a.name = String(a.name).toLowerCase();
     if ((a.type === 'CNAME' || a.type === 'NS' || a.type === 'PTR') && typeof a.data === 'string') a.data = a.data.toLowerCase();
+    const k = `${a.name}|${a.type}|${typeof a.data === 'string' ? a.data : JSON.stringify(a.data)}`;
+    const prev = seen.get(k);
+    if (prev) { if ((a.ttl ?? 0) > (prev.ttl ?? 0)) prev.ttl = a.ttl; continue; }
+    seen.set(k, a);
   }
-  return answers;
+  return [...seen.values()];
 }
 
 // ---------------------------------------------------------------- raw EDNS option injection (EDE / Cookie)
@@ -1369,7 +1721,14 @@ async function handleQuery(msg, meta) {
   stats.queries++;
   const t0 = Date.now();
   const respond = (rcode, answers, disp, edeOpt, adFlag) => {
-    logQuery({ t: Date.now(), client: meta.client, name: q.name, type: q.type, rcode, disp, ms: Date.now() - t0 });
+    if (!meta.noLog) logQuery({ t: Date.now(), client: meta.client, proto: meta.proto, name: q.name, type: q.type, rcode, disp, ms: Date.now() - t0 });
+    // Clamp the TTL we hand back for internal names, not just the time we keep them: a device
+    // that receives a 1-hour TTL for its own name will cache its old address itself, and no
+    // amount of cache hygiene here can reach that copy.
+    if (answers && answers.length && isInternalName(q.name)) {
+      const cap = Math.max(5, Number(config.internalTtlCap) || 30);
+      answers = answers.map(a => ((a.ttl ?? 0) > cap ? { ...a, ttl: cap } : a));
+    }
     const RCODES = { NOERROR: 0, FORMERR: 1, SERVFAIL: 2, NXDOMAIN: 3, NOTIMP: 4, REFUSED: 5 };
     let flags = dnsPacket.RECURSION_DESIRED | dnsPacket.RECURSION_AVAILABLE
       | (dnsPacket.AUTHORITATIVE_ANSWER * (disp === 'local' || (disp || '').startsWith('rewrite') ? 1 : 0))
@@ -1520,12 +1879,21 @@ async function handleQuery(msg, meta) {
   }
 
   // 3) Triage: blocklist (checked on qname; CNAME chain checked post-resolution below)
-  const blockedBy = (clientPolicy && clientPolicy.bypassBlocklist) ? null : isBlocked(q.name);
+  const blockingPaused = Number(config.blockingPausedUntil || 0) > Date.now();
+  const blockedBy = (blockingPaused || (clientPolicy && clientPolicy.bypassBlocklist)) ? null : isBlocked(q.name);
   if (blockedBy) {
     stats.blocked++;
     noteBlock(q.name, `matched blocklist entry '${blockedBy}'`);
     if (config.blockedResponse === 'blockpage' && config.blockPageIP && q.type === 'A') {
       return respond('NOERROR', [{ name: q.name, type: 'A', ttl: 60, data: config.blockPageIP }], `blocked:${blockedBy}`);
+    }
+    if (config.blockedResponse === 'sinkhole') {
+      if (q.type === 'A' || q.type === 'AAAA') {
+        const ip = q.type === 'A' ? (sinkholeAddress() || config.blockPageIP || '') : (config.sinkholeIPv6 || '');
+        if (ip) return respond('NOERROR', [{ name: q.name, type: q.type, ttl: 60, data: ip }], `blocked-sinkhole:${blockedBy}`);
+      }
+      // NODATA is less conspicuous than NXDOMAIN for unsupported RR types or an unconfigured address family.
+      return respond('NOERROR', [], `blocked-sinkhole-nodata:${blockedBy}`);
     }
     if (config.blockedResponse === 'zeroip' && (q.type === 'A' || q.type === 'AAAA')) {
       const data = q.type === 'A' ? '0.0.0.0' : '::';
@@ -1573,7 +1941,7 @@ async function handleQuery(msg, meta) {
     const answers = normalizeAnswers((resp.answers || []).filter(a => a.type !== 'OPT'));
     // CNAME cloaking: if any CNAME in the chain lands on a blocked domain, block the whole answer
     for (const a of answers) {
-      if (a.type === 'CNAME' && isBlocked(String(a.data).toLowerCase())) {
+      if (!(Number(config.blockingPausedUntil || 0) > Date.now()) && a.type === 'CNAME' && isBlocked(String(a.data).toLowerCase())) {
         stats.blocked++;
         return respond('NXDOMAIN', [], `blocked-cname:${a.data}`, edeOption(EDE.FILTERED, `cname-cloak: ${a.data}`));
       }
@@ -1690,10 +2058,13 @@ function saveConfig(opts) {
   if (!opts.noBroadcast && !_savingConfig && global.__sdBroadcastReload) global.__sdBroadcastReload();
 }
 
+const APP_VERSION = '24.0.0';
 const webServer = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/index.html')) {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
+    // Revalidate on every load: an upgrade replaces this file, and a cached console is
+    // indistinguishable from an update that never happened.
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache, must-revalidate' });
     return res.end(fs.readFileSync(path.join(__dirname, 'public', 'index.html')));
   }
   // --- public auth endpoints (no token/session required) ---
@@ -1716,6 +2087,23 @@ const webServer = http.createServer(async (req, res) => {
     const who = sessionUser(req);
     return json(res, 200, { user: who, authed: !!who || (req.headers['x-api-token'] === config.web.apiToken), tokenAuth: req.headers['x-api-token'] === config.web.apiToken });
   }
+  if (u.pathname === '/api/version' && req.method === 'GET') {
+    // Which code is actually running. The installer's checksum describes the file on disk,
+    // not the process holding the ports, so this closes that gap in one request.
+    let bytes = 0, sha = '';
+    try {
+      const b = fs.readFileSync(path.join(__dirname, 'server.js'));
+      bytes = b.length;
+      sha = require('crypto').createHash('sha256').update(b).digest('hex').slice(0, 16);
+    } catch {}
+    return json(res, 200, {
+      name: 'stellardns', version: APP_VERSION, node: process.version, pid: process.pid,
+      startedAt: new Date(startTime).toISOString(),
+      uptimeSec: Math.floor((Date.now() - startTime) / 1000),
+      server: { bytes, sha256_16: sha },
+      features: { resolve: true, dohJson: true, qps: true, protoInLog: true }
+    });
+  }
   if (!u.pathname.startsWith('/api/')) { res.writeHead(404); return res.end(); }
   if (!authOk(req)) return json(res, 401, { error: 'bad or missing token' });
 
@@ -1725,7 +2113,9 @@ const webServer = http.createServer(async (req, res) => {
       const agg = all.reduce((a, s) => { for (const k of Object.keys(s)) { if (typeof s[k] === 'number') a[k] = (a[k] || 0) + s[k];
         else if (k === 'perCategory') { a.perCategory = a.perCategory || {}; for (const c of Object.keys(s[k])) a.perCategory[c] = (a.perCategory[c] || 0) + s[k][c]; } } return a; }, {});
       return json(res, 200, {
-        stats: agg, workers: all.length, uptimeSec: Math.floor((Date.now() - startTime) / 1000),
+        stats: agg, qps: qpsNow,
+        hitRate: agg.queries ? Math.round(1000 * ((agg.cacheHits || 0) + (agg.cacheStale || 0)) / agg.queries) / 10 : 0,
+        workers: all.length, uptimeSec: Math.floor((Date.now() - startTime) / 1000),
         cacheSize: agg.cacheSize || cache.size, blocklist: blockMeta, ipv6: ipv6State,
         memory: { heapMB: Math.round(process.memoryUsage().heapUsed / 1048576),
                   rssMB: Math.round(process.memoryUsage().rss / 1048576),
@@ -1741,6 +2131,8 @@ const webServer = http.createServer(async (req, res) => {
           dohCanaryNxdomain: config.dohCanaryNxdomain, qnameMinimization: config.qnameMinimization,
           happyEyeballs: config.happyEyeballs, filterAAAA: config.filterAAAA, workers: config.workers,
           blockedResponse: config.blockedResponse, blockPageIP: config.blockPageIP,
+          sinkholeIP: config.sinkholeIP || '', sinkholeIPv6: config.sinkholeIPv6 || '',
+          blockingPausedUntil: Number(config.blockingPausedUntil || 0), clientNames: config.clientNames || {},
           clientAcl: config.clientAcl, rateLimitPerClientQps: config.rateLimitPerClientQps,
           internalZones: config.internalZones,
           cache: { serveStale: config.cache.serveStale, prefetch: config.cache.prefetch }
@@ -1813,6 +2205,80 @@ const webServer = http.createServer(async (req, res) => {
       return json(res, 200, r);
     }
     if (u.pathname === '/api/blocklists/refresh' && req.method === 'POST') return json(res, 200, await refreshBlocklists());
+    if (u.pathname === '/api/blocklist/allowlist' && req.method === 'GET') return json(res, 200, config.blockAllowlist || []);
+    if (u.pathname === '/api/blocklist/allowlist' && req.method === 'POST') {
+      const { domains } = await readBody(req);
+      if (Array.isArray(domains)) {
+        config.blockAllowlist = domains.map(d => String(d).toLowerCase().trim()).filter(Boolean);
+        saveConfig(); buildAllowIndex();
+        if (global.__sdBroadcastReload) global.__sdBroadcastReload();
+      }
+      return json(res, 200, config.blockAllowlist || []);
+    }
+    if (u.pathname === '/api/blocklist/allow' && req.method === 'POST') {
+      // One-click unblock: takes a raw domain (from the Blocking tab, or the query log's
+      // "unblock" button) and adds it to the allowlist without needing to resend the
+      // whole list. The allowlist overrides every blocklist for this domain and its
+      // subdomains, unconditionally — it does not remove the entry from any list.
+      const { domain } = await readBody(req);
+      const d = String(domain || '').toLowerCase().trim().replace(/^\*\./, '');
+      if (!d) return json(res, 400, { error: 'domain required' });
+      config.blockAllowlist = config.blockAllowlist || [];
+      if (!config.blockAllowlist.includes(d)) config.blockAllowlist.push(d);
+      saveConfig(); buildAllowIndex();
+      if (global.__sdBroadcastReload) global.__sdBroadcastReload();
+      return json(res, 200, { allowed: d, allowlist: config.blockAllowlist });
+    }
+    if (u.pathname === '/api/blocklist/unallow' && req.method === 'POST') {
+      const { domain } = await readBody(req);
+      const d = String(domain || '').toLowerCase().trim();
+      config.blockAllowlist = (config.blockAllowlist || []).filter(x => x !== d);
+      saveConfig(); buildAllowIndex();
+      if (global.__sdBroadcastReload) global.__sdBroadcastReload();
+      return json(res, 200, { removed: d, allowlist: config.blockAllowlist });
+    }
+    if (u.pathname === '/api/blocking/why' && req.method === 'GET') {
+      const domain = String(u.searchParams.get('domain') || '').toLowerCase().trim().replace(/^\.+|\.+$/g, '');
+      if (!domain || domain.length > 253 || !/^[a-z0-9._-]+$/.test(domain)) return json(res, 400, { error: 'valid domain required' });
+      const paused = Number(config.blockingPausedUntil || 0) > Date.now();
+      const allowed = isAllowed(domain); const rule = isBlocked(domain);
+      return json(res, 200, { domain, blocked: !!rule && !allowed && !paused, paused, allowlisted: allowed, matchedRule: rule || null,
+        explanation: paused ? 'Blocking is temporarily paused.' : allowed ? 'This domain or its parent is on the allowlist.' : rule ? `Matched blocklist entry: ${rule}` : 'No direct blocklist match found; a CNAME target or client policy may be responsible.' });
+    }
+    if (u.pathname === '/api/blocking/pause' && req.method === 'POST') {
+      const b = await readBody(req); const minutes = Math.max(0, Math.min(10080, Number(b.minutes) || 0));
+      config.blockingPausedUntil = minutes ? Date.now() + minutes * 60000 : 0;
+      saveConfig(); if (global.__sdBroadcastReload) global.__sdBroadcastReload();
+      return json(res, 200, { paused: config.blockingPausedUntil > Date.now(), until: config.blockingPausedUntil });
+    }
+    if (u.pathname === '/api/clients/names' && req.method === 'GET') return json(res, 200, config.clientNames || {});
+    if (u.pathname === '/api/clients/names' && req.method === 'POST') {
+      const b = await readBody(req); const names = {};
+      if (!b || !b.names || typeof b.names !== 'object' || Array.isArray(b.names)) return json(res, 400, { error: 'names must be an IP-to-name object' });
+      for (const [ip, name] of Object.entries(b.names)) {
+        if (!net.isIP(ip)) return json(res, 400, { error: `invalid client IP: ${ip}` });
+        const label = String(name || '').trim().slice(0, 80); if (label) names[ip] = label;
+      }
+      config.clientNames = names; saveConfig(); return json(res, 200, names);
+    }
+    if (u.pathname === '/api/backup' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename=stellardns-config-backup.json' });
+      return res.end(JSON.stringify({ format: 'stellardns-config-backup', version: 22, exportedAt: new Date().toISOString(), config }, null, 2));
+    }
+    if (u.pathname === '/api/backup/restore' && req.method === 'POST') {
+      const b = await readBody(req); const incoming = b && b.config ? b.config : b;
+      if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming) || !incoming.dns || !incoming.web || !Array.isArray(incoming.upstreams)) return json(res, 400, { error: 'invalid backup: expected dns, web, and upstreams configuration' });
+      if (incoming.web && incoming.web.apiToken && String(incoming.web.apiToken).length < 16) return json(res, 400, { error: 'backup API token is malformed' });
+      const candidate = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONFIG)), incoming);
+      if (!Number.isInteger(Number(candidate.dns.port)) || Number(candidate.dns.port) < 1 || Number(candidate.dns.port) > 65535) return json(res, 400, { error: 'invalid DNS port' });
+      if (!Array.isArray(candidate.blocklists) || !Array.isArray(candidate.blockAllowlist) || !Array.isArray(candidate.upstreams)) return json(res, 400, { error: 'invalid list settings in backup' });
+      // Preserve the current authentication secret unless the supplied backup has a valid one.
+      if (!candidate.web.apiToken) candidate.web.apiToken = config.web.apiToken;
+      Object.keys(config).forEach(k => delete config[k]); Object.assign(config, candidate);
+      saveConfig(); buildAllowIndex(); invalidateCategoryIndex(); invalidateLocalIndex(); buildCondForwarders(); buildInternalFallback();
+      if (global.__sdBroadcastReload) global.__sdBroadcastReload();
+      return json(res, 200, { ok: true, restored: true, note: 'Configuration restored; service restart may be required for listener changes.' });
+    }
     if (u.pathname === '/api/localrecords' && req.method === 'GET') return json(res, 200, config.localRecords || []);
     if (u.pathname === '/api/localrecords' && req.method === 'POST') {
       const { records } = await readBody(req);
@@ -1879,14 +2345,17 @@ const webServer = http.createServer(async (req, res) => {
     }
     if (u.pathname === '/api/settings' && req.method === 'POST') {
       const b = await readBody(req);
+      if ('sinkholeIP' in b && b.sinkholeIP && net.isIP(String(b.sinkholeIP).trim()) !== 4) return json(res, 400, { error: 'sinkholeIP must be a valid IPv4 address' });
+      if ('sinkholeIPv6' in b && b.sinkholeIPv6 && net.isIP(String(b.sinkholeIPv6).trim()) !== 6) return json(res, 400, { error: 'sinkholeIPv6 must be a valid IPv6 address' });
       const allowTop = ['race','ecs','ecsPrefixV4','ecsPrefixV6','qnameMinimization','happyEyeballs','filterAAAA',
         'dnssec','rebindingProtection','rebindingAllow','dnsCookies','caseRandomization','failoverJitter',
-        'dohCanaryNxdomain','blockedResponse','blockPageIP','clientAcl','rateLimitPerClientQps',
-        'internalZones','workers'];
+        'dohCanaryNxdomain','blockedResponse','blockPageIP','sinkholeIP','sinkholeIPv6','blockingPausedUntil','clientNames','clientAcl','rateLimitPerClientQps',
+        'internalZones','workers','hedge','hedgeDelayMs','internalTtlCap','internalServeStale'];
       for (const k of allowTop) if (k in b) config[k] = b[k];
       if (b.cache && typeof b.cache === 'object') config.cache = { ...config.cache, ...b.cache };
       saveConfig();
       if (global.__sdBroadcastReload) global.__sdBroadcastReload();
+      try { ensureStubPort80(); } catch {}   // switching to sinkhole must start :80 immediately
       return json(res, 200, { ok: true });
     }
     if (u.pathname === '/api/forwarders' && req.method === 'POST') {
@@ -1898,6 +2367,30 @@ const webServer = http.createServer(async (req, res) => {
       saveConfig(); buildCondForwarders(); buildInternalFallback();
       if (global.__sdBroadcastReload) global.__sdBroadcastReload();
       return json(res, 200, { conditionalForwarders: config.conditionalForwarders, internalZones: config.internalZones });
+    }
+    if (u.pathname === '/api/resolve' && req.method === 'GET') {
+      // Diagnostic: resolve through the exact path a client takes (local records, zone
+      // forwarding, rewrites, blocklists, cache) without polluting the query log.
+      const name = normZone(u.searchParams.get('name') || '');
+      const type = String(u.searchParams.get('type') || 'A').toUpperCase();
+      if (!name || name.length > 253 || !/^[a-z0-9][a-z0-9.-]*\.[a-z0-9-]+$/.test(name)) return json(res, 400, { error: 'valid name required' });
+      let queryWire;
+      try {
+        queryWire = dnsPacket.encode({ type: 'query', id: Math.floor(Math.random() * 65535), flags: dnsPacket.RECURSION_DESIRED,
+          questions: [{ type, name }], additionals: [{ type: 'OPT', name: '.', udpPayloadSize: config.dns.ednsUdpSize }] });
+      } catch (e) { return json(res, 400, { error: 'unsupported record type' }); }
+      const t0 = Date.now();
+      const wire = await handleQuery(queryWire, { client: '127.0.0.1', proto: 'api', noLog: true });
+      if (!wire) return json(res, 502, { error: 'no response' });
+      let d;
+      try { d = dnsPacket.decode(wire); } catch (e) { return json(res, 502, { error: 'undecodable response' }); }
+      const RCODES = ['NOERROR', 'FORMERR', 'SERVFAIL', 'NXDOMAIN', 'NOTIMP', 'REFUSED'];
+      return json(res, 200, {
+        name, type, ms: Date.now() - t0,
+        rcode: RCODES[d.flags & 0xf] || 'NOERROR',
+        ad: !!(d.flags & dnsPacket.AUTHENTIC_DATA),
+        answers: (d.answers || []).map(a => ({ name: a.name, type: a.type, ttl: a.ttl, data: a.data }))
+      });
     }
     if (u.pathname === '/api/analytics') {
       const top = {}, clients = {}, blocked = {}, byDisp = {};
@@ -2044,7 +2537,7 @@ if (cluster.isPrimary && WORKER_COUNT > 1) {
             config = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONFIG)), fresh);
             users = loadUsers();
             upstreams = config.upstreams.map(u => new Upstream(u));
-            buildCondForwarders(); buildInternalFallback();
+            buildCondForwarders(); buildInternalFallback(); buildAllowIndex();
             _savingConfig = false;
             // Only re-parse the blocklist snapshot if the blocklist config changed.
             // It used to run on EVERY config save, in EVERY worker — a multi-hundred-
@@ -2073,6 +2566,7 @@ if (cluster.isPrimary && WORKER_COUNT > 1) {
   buildCondForwarders();
   buildInternalFallback();
   setTimeout(() => { try { probeInternalResolvers(); } catch {} }, 1500);
+  buildAllowIndex();
   loadBlocklistFromDisk();
   restoreCache();
   if (IS_PRIMARY) {

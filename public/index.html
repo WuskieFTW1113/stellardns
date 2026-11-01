@@ -5,149 +5,236 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>StellarDNS</title>
 <style>
-  :root{
-    --bg:#0a0f16; --bg2:#0e141d; --panel:#111925; --panel2:#161f2c; --line:#1e2a3a;
-    --line2:#26374b; --ink:#e6edf6; --ink2:#9fb0c6; --dim:#63748d;
-    --sig:#31e39a; --sig-dim:#1c8b62; --blue:#4a9eff; --amber:#ffbb52; --red:#ff5f6e; --violet:#9d8cff;
-    --r:12px; --shadow:0 8px 30px -12px #000a;
-  }
-  *{box-sizing:border-box;margin:0}
-  html{-webkit-text-size-adjust:100%}
-  body{
-    background:
-      radial-gradient(1100px 600px at 82% -8%, #12403233 0%, transparent 55%),
-      radial-gradient(900px 500px at 0% 0%, #10233d33 0%, transparent 50%),
-      var(--bg);
-    color:var(--ink);
-    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
-    letter-spacing:.1px; min-height:100vh;
-  }
-  .mono{font-family:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,monospace}
-  h1,h2,h3{font-weight:600;letter-spacing:-.2px}
-  button{font:inherit;cursor:pointer;border:0;border-radius:9px;padding:8px 14px;font-weight:600;
-    background:var(--sig);color:#04150e;transition:.15s;letter-spacing:.2px}
-  button:hover{filter:brightness(1.08)} button:active{transform:translateY(1px)}
-  button.ghost{background:var(--panel2);color:var(--ink);border:1px solid var(--line2)}
-  button.ghost:hover{background:#1c2838;border-color:var(--sig-dim)}
-  button.danger{background:#2a1520;color:var(--red);border:1px solid #4a2530}
-  button.danger:hover{background:#3a1a28}
-  button.sm{padding:5px 10px;font-size:12.5px}
-  input,textarea,select{font:inherit;background:#0c131c;border:1px solid var(--line2);color:var(--ink);
-    border-radius:8px;padding:8px 11px;width:100%;transition:.12s}
-  input:focus,textarea:focus,select:focus{outline:0;border-color:var(--sig-dim);box-shadow:0 0 0 3px #31e39a1a}
-  textarea{resize:vertical;min-height:88px}
-  ::placeholder{color:var(--dim)}
-  label.fld{display:block;font-size:12px;color:var(--ink2);margin:0 0 5px;font-weight:500}
-  .pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 9px;
-    border-radius:999px;background:var(--panel2);color:var(--ink2);border:1px solid var(--line)}
-  .pill.on{background:#0f2a20;color:var(--sig);border-color:#1c5a41}
-  .pill.off{background:#2a1518;color:var(--red);border-color:#5a2530}
+/* StellarDNS console — design tokens and components.
+   Visual language: instrument panel. Mono type, hairline rules, squared geometry,
+   one signal colour (vermilion) on graphite. No gradients, no glows, no rounded pills.
+   Every selector here is referenced by the markup or by JS-generated markup. */
 
-  #shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
-  aside{background:linear-gradient(180deg,var(--bg2),var(--bg));border-right:1px solid var(--line);
-    padding:22px 14px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:4px}
-  .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px}
-  .brand .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,var(--sig),#1a7fd6);
-    display:grid;place-items:center;color:#04150e;font-weight:800;font-size:17px;box-shadow:0 0 20px -4px #31e39a66}
-  .brand b{font-size:16px;letter-spacing:-.3px}.brand span{color:var(--sig)}
-  .brand small{display:block;color:var(--dim);font-size:10.5px;letter-spacing:.4px;font-weight:500;margin-top:1px}
-  nav.side{display:flex;flex-direction:column;gap:2px;margin-top:6px}
-  nav.side a{display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;color:var(--ink2);
-    font-weight:500;font-size:13.5px;cursor:pointer;transition:.12s;border:1px solid transparent}
-  nav.side a:hover{background:#141d29;color:var(--ink)}
-  nav.side a.active{background:#132132;color:var(--ink);border-color:var(--line2)}
-  nav.side a.active .ic{color:var(--sig)}
-  nav.side a .ic{width:17px;text-align:center;opacity:.9;color:var(--dim)}
-  .side-foot{margin-top:auto;padding:12px 10px 2px;border-top:1px solid var(--line);font-size:11.5px;color:var(--dim)}
-  .side-foot .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--sig);
-    box-shadow:0 0 8px var(--sig);margin-right:6px;animation:pulse 2.4s infinite}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+:root{
+  --bg:#0b0b0e; --bg2:#0d0d11; --panel:#121216; --panel2:#17171c;
+  --line:#232329; --line2:#31313a; --grid:#ffffff07;
+  --ink:#ece8de; --ink2:#a9a396; --dim:#8a8478;
+  --sig:#ff5c35; --sig-dim:#8f3418; --blue:#63a9e8; --amber:#e9b949; --red:#ff5a6a; --violet:#b6a1ff;
+  --r:2px; --shadow:0 24px 60px -34px #000;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,monospace;
+}
+[data-theme="light"]{
+  --bg:#f5f2ea; --bg2:#efece3; --panel:#fbf9f3; --panel2:#f1eee5;
+  --line:#dcd6c9; --line2:#c8c0af; --grid:#00000008;
+  --ink:#171619; --ink2:#514c43; --dim:#6f685c;
+  --sig:#bd3a15; --sig-dim:#e2ab96; --blue:#1f63a8; --amber:#8a6400; --red:#b32a3a; --violet:#5d45b0;
+  --shadow:0 24px 60px -40px #2a2418;
+}
 
-  main{padding:26px 30px 60px;max-width:1180px}
-  .head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap}
-  .head h1{font-size:23px}.head p{color:var(--dim);font-size:13px;margin-top:3px}
-  .head .r{display:flex;gap:8px;align-items:center}
+*{box-sizing:border-box;margin:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background-color:var(--bg);
+  background-image:
+    repeating-linear-gradient(0deg,transparent 0 31px,var(--grid) 31px 32px),
+    repeating-linear-gradient(90deg,transparent 0 31px,var(--grid) 31px 32px);
+  background-attachment:fixed;
+  color:var(--ink);
+  font:13.5px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;
+  -webkit-font-smoothing:antialiased;
+  min-height:100vh;
+}
+.mono{font-family:var(--mono)}
+h1,h2,h3{font-family:var(--mono);font-weight:600;letter-spacing:.02em;text-transform:uppercase}
 
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px}
-  .card{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);
-    border-radius:var(--r);padding:15px 16px;position:relative;overflow:hidden}
-  .card::after{content:"";position:absolute;inset:0 0 auto 0;height:2px;
-    background:linear-gradient(90deg,var(--sig),transparent 70%);opacity:.5}
-  .card .k{font-size:11.5px;color:var(--dim);font-weight:500;letter-spacing:.3px;text-transform:uppercase}
-  .card .v{font-size:28px;font-weight:700;letter-spacing:-1px;margin-top:5px;font-family:ui-monospace,monospace}
-  .card .v.sig{color:var(--sig)}.card .v.blue{color:var(--blue)}.card .v.amber{color:var(--amber)}
-  .card .sub{font-size:11.5px;color:var(--ink2);margin-top:3px}
+/* ---------------------------------------------------------------- controls */
+button{
+  font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
+  cursor:pointer;border:1px solid var(--sig);border-radius:var(--r);padding:9px 14px;
+  background:var(--sig);color:#150704;transition:background .12s,color .12s,border-color .12s;
+}
+button:hover{background:transparent;color:var(--sig)}
+button:active{transform:translateY(1px)}
+button.ghost{background:transparent;color:var(--ink2);border-color:var(--line2)}
+button.ghost:hover{background:transparent;border-color:var(--sig);color:var(--sig)}
+button.danger{background:transparent;color:var(--red);border-color:var(--red)}
+button.danger:hover{background:var(--red);color:#150406;border-color:var(--red)}
+button.sm{padding:6px 10px;font-size:9.5px}
 
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
-    padding:20px;margin-bottom:18px;box-shadow:var(--shadow)}
-  .panel h2{font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:9px}
-  .panel h2 .ic{color:var(--sig)}
-  .panel .desc{color:var(--dim);font-size:12.5px;margin-bottom:16px;line-height:1.5}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
-  .row{display:flex;gap:9px;align-items:center;margin-top:10px;flex-wrap:wrap}
-  .row>input,.row>select{flex:1;min-width:110px}
+input,textarea,select{
+  font-family:var(--mono);font-size:12.5px;background:var(--panel2);border:1px solid var(--line2);
+  color:var(--ink);border-radius:var(--r);padding:8px 10px;width:100%;transition:border-color .12s,box-shadow .12s;
+}
+input:focus,textarea:focus,select:focus{outline:0;border-color:var(--sig);box-shadow:0 0 0 2px rgba(255,92,53,.16)}
+textarea{resize:vertical;min-height:88px;line-height:1.6}
+::placeholder{color:var(--dim)}
+label.fld{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dim);margin:0 0 6px;font-weight:600}
 
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{text-align:left;color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;
-    letter-spacing:.4px;padding:8px 10px;border-bottom:1px solid var(--line)}
-  td{padding:9px 10px;border-bottom:1px solid #172230}
-  tr:last-child td{border-bottom:0}
-  tbody tr:hover{background:#0e1721}
+.pill{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9.5px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;padding:3px 7px;border-radius:var(--r);
+  background:transparent;color:var(--ink2);border:1px solid var(--line2)}
+.pill.on{background:transparent;color:var(--sig);border-color:var(--sig-dim)}
+.pill.off{background:transparent;color:var(--red);border-color:var(--red)}
 
-  .tg{position:relative;width:42px;height:24px;background:#28323f;border-radius:99px;cursor:pointer;
-    transition:.18s;flex:none;border:1px solid #333f4e}
-  .tg.on{background:var(--sig);border-color:var(--sig)}
-  .tg::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;background:#fff;
-    border-radius:50%;transition:.18s;box-shadow:0 1px 3px #0007}
-  .tg.on::after{left:20px}
+/* ---------------------------------------------------------------- shell */
+#shell{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+aside{background:var(--bg2);border-right:1px solid var(--line);padding:20px 12px;
+  position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:0}
 
-  .cat{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;
-    border:1px solid var(--line);margin-bottom:8px;background:var(--panel2);transition:.12s}
-  .cat:hover{border-color:var(--line2)}
-  .cat .nm{width:120px;font-weight:600;font-size:13.5px;text-transform:capitalize;flex:none}
-  .cat .nm small{display:block;font-weight:400;color:var(--dim);font-size:11px;text-transform:none}
-  .cat input.tgt{flex:1;min-width:120px}
-  .cat .acts{display:flex;gap:6px;flex:none}
+.brand{display:flex;align-items:center;gap:11px;padding:2px 8px 20px;margin-bottom:4px;border-bottom:1px solid var(--line)}
+.brand .logo{width:34px;height:34px;border:1px solid var(--sig);border-radius:var(--r);display:grid;
+  place-items:center;color:var(--sig);font-size:15px;background:transparent;box-shadow:none;flex:none}
+.brand b{font-family:var(--mono);font-size:13.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:600}
+.brand span{color:var(--sig)}
+.brand small{display:block;color:var(--dim);font-size:8.5px;letter-spacing:.24em;font-weight:500;margin-top:4px;text-transform:uppercase}
 
-  .logwrap{max-height:460px;overflow:auto;border-radius:10px;border:1px solid var(--line)}
-  .logwrap table{font-size:12.5px}
-  .logwrap th{position:sticky;top:0;background:var(--panel);z-index:1}
-  .disp{font-family:ui-monospace,monospace;font-size:11.5px;padding:2px 7px;border-radius:5px;font-weight:600}
-  .d-cache{background:#0f2a20;color:var(--sig)}.d-rewrite{background:#10263f;color:var(--blue)}
-  .d-blocked{background:#2a1518;color:var(--red)}.d-stale{background:#2a2313;color:var(--amber)}
-  .d-forward{background:#1d1633;color:var(--violet)}.d-local{background:#132132;color:var(--ink2)}
-  .d-upstream{background:#141d29;color:var(--ink2)}
+nav.side{counter-reset:nav;display:flex;flex-direction:column;gap:0;margin-top:2px}
+.nav-label{font-family:var(--mono);font-size:8.5px;letter-spacing:.26em;font-weight:600;color:var(--dim);
+  padding:16px 10px 6px;text-transform:uppercase}
+nav.side a{display:flex;align-items:center;gap:10px;padding:8px 10px;color:var(--ink2);font-size:13px;
+  cursor:pointer;border-left:2px solid transparent;border-radius:0;transition:.12s;font-weight:400}
+nav.side a{counter-increment:nav;position:relative}
+nav.side a::after{content:counter(nav,decimal-leading-zero);margin-left:auto;font-family:var(--mono);
+  font-size:9px;color:var(--dim);letter-spacing:.08em}
+nav.side a:hover{background:var(--panel2);color:var(--ink)}
+nav.side a.active{background:var(--panel);color:var(--ink);border-left-color:var(--sig)}
+nav.side a.active::after{color:var(--sig)}
+nav.side a.active .ic{color:var(--sig)}
+nav.side a .ic{width:15px;text-align:center;opacity:1;color:var(--dim);font-size:12px;flex:none}
 
-  #login{position:fixed;inset:0;display:grid;place-items:center;
-    background:radial-gradient(800px 500px at 50% 20%,#0f2a2033,transparent),var(--bg);z-index:50}
-  #login .box{width:360px;max-width:92vw;background:var(--panel);border:1px solid var(--line2);
-    border-radius:16px;padding:30px 28px;box-shadow:0 30px 80px -20px #000}
-  #login .lg{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,var(--sig),#1a7fd6);
-    display:grid;place-items:center;color:#04150e;font-weight:800;font-size:24px;margin:0 auto 16px;
-    box-shadow:0 0 30px -6px #31e39a99}
-  #login h2{text-align:center;font-size:20px;margin-bottom:3px}
-  #login p{text-align:center;color:var(--dim);font-size:12.5px;margin-bottom:22px}
-  #login .box>*+*{margin-top:11px}
-  #login .msg{text-align:center;font-size:12.5px;min-height:16px;color:var(--amber)}
-  .divider{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:11px;margin:14px 0}
-  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+.side-foot{margin-top:auto;padding:14px 10px 2px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+.side-foot .dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--sig);
+  box-shadow:0 0 0 3px rgba(255,92,53,.16);margin-right:7px;animation:pulse 2.4s infinite;vertical-align:middle}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-  .hidden{display:none!important}
-  .empty{color:var(--dim);font-size:13px;text-align:center;padding:26px}
-  .tag{font-size:10.5px;color:var(--dim);font-family:ui-monospace,monospace}
-  .flash{position:fixed;bottom:22px;right:22px;background:var(--panel2);border:1px solid var(--sig-dim);
-    color:var(--ink);padding:11px 16px;border-radius:10px;font-size:13px;box-shadow:var(--shadow);
-    opacity:0;transform:translateY(8px);transition:.2s;z-index:60}
-  .flash.show{opacity:1;transform:none}
-  .menu-btn{display:none;align-items:center;justify-content:center;width:38px;height:38px;padding:0}
-  @media(max-width:720px){
-    #shell{grid-template-columns:1fr}
-    aside{position:fixed;left:0;top:0;bottom:0;z-index:40;transform:translateX(-100%);transition:.2s;width:230px}
-    aside.open{transform:none}
-    main{padding:18px 16px 50px}
-    .menu-btn{display:inline-flex!important}
-  }
+/* ---------------------------------------------------------------- page */
+main{padding:24px 28px 64px;max-width:1200px;counter-reset:panel}
+.head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  margin-bottom:22px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.head h1{font-size:17px;letter-spacing:.1em}
+.head h1::before{content:"›";color:var(--sig);margin-right:9px;font-weight:400}
+.head p{color:var(--dim);font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;
+  font-family:var(--mono);margin-top:5px}
+.head .r{display:flex;gap:8px;align-items:center}
+
+/* metric strip: hairline-separated cells rather than floating cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:1px;
+  background:transparent;border:1px solid var(--line);margin-bottom:22px;border-radius:var(--r);overflow:hidden}
+/* Separators live on the cells, not the container: a partial last row then shows page
+   background instead of a solid block of rule colour. */
+.card{background:var(--panel);border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+  border-radius:0;padding:14px 15px;position:relative;transition:background .14s;overflow:hidden}
+.card:hover{transform:none;background:var(--panel2)}
+.card::after{display:none}
+.card .k{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);
+  font-weight:600;display:flex;align-items:center;gap:6px}
+.card .k::before{content:"";width:4px;height:4px;background:var(--dim);flex:none}
+.card .v{font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:-.03em;margin-top:8px;line-height:1.05}
+.card .v.sig{color:var(--sig)}.card .v.blue{color:var(--blue)}.card .v.amber{color:var(--amber)}
+.card .sub{font-family:var(--mono);font-size:9.5px;color:var(--dim);margin-top:7px;letter-spacing:.03em}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:18px;margin-bottom:16px;position:relative;box-shadow:none;counter-increment:panel}
+.panel::before{content:"";position:absolute;left:0;top:16px;bottom:16px;width:2px;background:var(--sig);
+  opacity:0;transition:opacity .15s}
+.panel:hover::before{opacity:.5}
+.panel h2{font-size:11px;letter-spacing:.16em;margin:0 0 12px;display:flex;align-items:center;gap:9px;
+  padding-bottom:10px;border-bottom:1px solid var(--line)}
+.panel h2::before{content:counter(panel,decimal-leading-zero);font-size:8.5px;letter-spacing:.1em;
+  color:var(--sig);border:1px solid var(--line2);padding:2px 5px;flex:none}
+.panel h2 .ic{color:var(--sig);font-size:12px;flex:none}
+.panel .desc{color:var(--ink2);font-size:11.5px;margin:0 0 16px;line-height:1.6}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}}
+.row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.row>input,.row>select{flex:1;min-width:110px}
+
+/* ---------------------------------------------------------------- tables */
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--dim);font-family:var(--mono);font-weight:600;font-size:9px;
+  text-transform:uppercase;letter-spacing:.18em;padding:8px 10px;border-bottom:1px solid var(--line2)}
+td{padding:9px 10px;border-bottom:1px solid var(--line)}
+td:first-child,th:first-child{padding-left:0}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--panel2)}
+
+.tg{position:relative;width:38px;height:20px;background:var(--panel2);border-radius:var(--r);cursor:pointer;
+  transition:.16s;flex:none;border:1px solid var(--line2)}
+.tg.on{background:transparent;border-color:var(--sig)}
+.tg::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;background:var(--dim);
+  border-radius:1px;transition:.16s}
+.tg.on::after{left:20px;background:var(--sig)}
+
+.cat{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:var(--r);
+  border:1px solid var(--line);margin-bottom:6px;background:transparent;transition:.12s}
+.cat:hover{border-color:var(--line2);background:var(--panel2)}
+.cat .nm{width:120px;font-weight:600;font-size:12.5px;text-transform:uppercase;flex:none;
+  font-family:var(--mono);letter-spacing:.08em}
+.cat .nm small{display:block;font-weight:400;color:var(--dim);font-size:9px;text-transform:none;letter-spacing:.04em;margin-top:2px}
+.cat input.tgt{flex:1;min-width:120px}
+.cat .acts{display:flex;gap:6px;flex:none}
+
+.logwrap{max-height:460px;overflow:auto;border-radius:var(--r);border:1px solid var(--line)}
+.logwrap table{font-size:12px}
+.logwrap th{position:sticky;top:0;background:var(--panel);z-index:1}
+.disp{font-family:var(--mono);font-size:9.5px;padding:2px 6px;border-radius:1px;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;border:1px solid transparent;display:inline-block}
+.d-cache{background:transparent;color:var(--sig);border-color:var(--sig-dim)}
+.d-rewrite{background:transparent;color:var(--blue);border-color:color-mix(in srgb,var(--blue) 45%,transparent)}
+.d-blocked{background:transparent;color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,transparent)}
+.d-stale{background:transparent;color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,transparent)}
+.d-forward{background:transparent;color:var(--violet);border-color:color-mix(in srgb,var(--violet) 45%,transparent)}
+.d-local{background:transparent;color:var(--ink2);border-color:var(--line2)}
+.d-upstream{background:transparent;color:var(--dim);border-color:var(--line)}
+
+/* ---------------------------------------------------------------- login */
+#login{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);z-index:50}
+#login .box{width:364px;max-width:92vw;background:var(--panel);border:1px solid var(--line2);
+  border-radius:var(--r);padding:28px 26px;box-shadow:var(--shadow);position:relative}
+#login .box::before{content:"";position:absolute;left:-1px;top:18px;bottom:18px;width:2px;background:var(--sig)}
+#login .lg{width:40px;height:40px;border-radius:var(--r);border:1px solid var(--sig);background:transparent;
+  display:grid;place-items:center;color:var(--sig);font-size:16px;margin:0 auto 16px;box-shadow:none}
+#login h2{text-align:center;font-size:14px;letter-spacing:.22em;margin-bottom:5px}
+#login p{text-align:center;color:var(--dim);font-size:9px;letter-spacing:.18em;text-transform:uppercase;
+  font-family:var(--mono);margin-bottom:22px}
+#login .box>*+*{margin-top:11px}
+#login .msg{text-align:center;font-size:11px;min-height:16px;color:var(--amber);font-family:var(--mono);letter-spacing:.06em}
+.divider{display:flex;align-items:center;gap:10px;color:var(--dim);font-family:var(--mono);
+  font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;margin:14px 0}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* ---------------------------------------------------------------- misc */
+.hidden{display:none!important}
+.empty{color:var(--dim);font-size:11.5px;text-align:center;padding:26px;font-family:var(--mono);letter-spacing:.1em}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--sig);outline-offset:2px}
+.qpswrap{position:relative;margin-top:14px}
+#qpschart{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;box-sizing:content-box}
+#qpschart g line{stroke:var(--line2);stroke-dasharray:2 5}
+#qpschart polyline{stroke-width:1.8}
+.qps-axis{display:flex;justify-content:space-between;color:var(--dim);font-size:9px;margin-top:6px;
+  font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase}
+.qps-axis b{color:var(--ink2);font-weight:600}
+#res_out{max-height:240px;overflow:auto;line-height:1.75}
+.tag{font-size:9.5px;color:var(--dim);font-family:var(--mono);letter-spacing:.08em}
+.flash{position:fixed;bottom:22px;right:22px;background:var(--panel);border:1px solid var(--sig);
+  color:var(--ink);padding:11px 16px;border-radius:var(--r);font-size:11.5px;box-shadow:var(--shadow);
+  opacity:0;transform:translateY(8px);transition:.2s;z-index:60;font-family:var(--mono);letter-spacing:.06em}
+.flash.show{opacity:1;transform:none}
+.menu-btn{display:none;align-items:center;justify-content:center;width:36px;height:34px;padding:0}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+*{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+*::-webkit-scrollbar{width:10px;height:10px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:var(--line2);border:3px solid var(--bg);border-radius:0}
+*::-webkit-scrollbar-thumb:hover{background:var(--sig)}
+
+@media(max-width:720px){
+  #shell{grid-template-columns:1fr}
+  aside{position:fixed;left:0;top:0;bottom:0;z-index:40;transform:translateX(-100%);transition:.2s;width:240px}
+  aside.open{transform:none}
+  main{padding:18px 16px 50px}
+  .menu-btn{display:inline-flex!important}
+}
 </style>
 </head>
 <body>
@@ -173,13 +260,16 @@
       <div><b>Stellar<span>DNS</span></b><small class="mono">RESOLVER CONSOLE</small></div>
     </div>
     <nav class="side" id="nav">
+      <div class="nav-label">MONITOR</div>
       <a data-v="overview" class="active"><span class="ic">◆</span> Overview</a>
+      <div class="nav-label">DNS POLICY</div>
       <a data-v="rewrites"><span class="ic">⇄</span> Rewrites &amp; launchers</a>
       <a data-v="blocking"><span class="ic">⊘</span> Blocking</a>
       <a data-v="zones"><span class="ic">⌂</span> Local &amp; internal zones</a>
       <a data-v="upstreams"><span class="ic">↑</span> Upstreams</a>
       <a data-v="log"><span class="ic">≣</span> Query log</a>
       <a data-v="analytics"><span class="ic">▦</span> Analytics</a>
+      <div class="nav-label">ADMINISTRATION</div>
       <a data-v="access"><span class="ic">⚿</span> Access &amp; users</a>
       <a data-v="settings"><span class="ic">⚙</span> Settings</a>
     </nav>
@@ -198,12 +288,34 @@
       </div>
       <div class="r">
         <span class="pill" id="whoami"></span>
-        <button class="ghost sm" onclick="doLogout()">Sign out</button>
+        <button class="ghost sm" onclick="toggleTheme()" id="themebtn">☼ Theme</button><button class="ghost sm" onclick="doLogout()">Sign out</button>
       </div>
     </div>
 
     <section data-view="overview">
       <div class="cards" id="cards"></div>
+      <div class="panel">
+        <h2><span class="ic">⌁</span> Live query rate</h2>
+        <div class="desc">Queries per second sampled from the resolver counters.</div>
+        <div style="display:flex;align-items:baseline;gap:12px"><strong id="qpsvalue" style="font-size:28px;font-family:ui-monospace,monospace">0</strong><span class="tag">queries / sec</span></div>
+        <div class="qpswrap">
+          <svg id="qpschart" viewBox="0 0 700 90" role="img" aria-label="Live queries per second chart" style="width:100%;height:100px">
+            <defs><linearGradient id="qpsfill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--sig)" stop-opacity=".32"/>
+              <stop offset="100%" stop-color="var(--sig)" stop-opacity="0"/>
+            </linearGradient></defs>
+            <g stroke="var(--line)" stroke-width="1">
+              <line x1="0" y1="12" x2="700" y2="12"/>
+              <line x1="0" y1="46" x2="700" y2="46"/>
+              <line x1="0" y1="80" x2="700" y2="80"/>
+            </g>
+            <polygon id="qpsarea" points="0,80 700,80" fill="url(#qpsfill)"/>
+            <polyline id="qpsline" points="0,80 700,80" fill="none" stroke="var(--sig)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            <circle id="qpsdot" cx="700" cy="80" r="3.2" fill="var(--sig)"/>
+          </svg>
+          <div class="qps-axis"><span>last ~2 min</span><span>peak <b id="qpspeak">0</b> q/s</span></div>
+        </div>
+      </div>
       <div class="grid2">
         <div class="panel">
           <h2><span class="ic">↑</span> Upstream health</h2>
@@ -248,6 +360,7 @@
       <div class="panel">
         <h2><span class="ic">⊘</span> Blocklists</h2>
         <div class="desc">AdGuard, hosts, or plain-domain format URLs — one per line. Lists are validated before applying; the last good version is kept for instant rollback if an update is malformed.</div>
+        <div class="row" style="margin-bottom:8px"><select id="blpreset" style="max-width:340px"><option value="">Choose a blocklist preset…</option><option value="hagezi-light">HaGeZi Multi LIGHT</option><option value="hagezi-pro">HaGeZi Multi PRO</option><option value="adguard-dns">AdGuard DNS filter</option><option value="oisd-small">OISD small</option></select><button class="ghost" onclick="addBlockPreset()">Add preset</button></div>
         <textarea id="bl" placeholder="https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt"></textarea>
         <div class="row"><button onclick="saveBlocklists()">Save &amp; refresh</button><button class="ghost" onclick="refreshBlocklists()">Refresh now</button><span class="pill" id="blmeta"></span></div>
       </div>
@@ -259,10 +372,24 @@
             <option value="nxdomain">NXDOMAIN (silent)</option>
             <option value="zeroip">0.0.0.0 (null route)</option>
             <option value="blockpage">Block page with reason</option>
+            <option value="sinkhole">Stealth sinkhole (DNS + stub HTTP)</option>
           </select>
-          <input id="blockpageip" placeholder="block page IP (this host)" style="max-width:200px">
+          <input id="blockpageip" placeholder="block page IP" style="max-width:160px">
+          <input id="sinkholeip" placeholder="sinkhole IPv4" style="max-width:150px">
+          <input id="sinkholeip6" placeholder="sinkhole IPv6 (optional)" style="max-width:180px">
           <button onclick="saveBlockMode()">Save</button>
         </div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">◷</span> Pause blocking</h2>
+        <div class="desc">Temporarily bypass blocklists without deleting rules. A pause expires automatically; custom local records and access policies remain active.</div>
+        <div class="row"><select id="pausemins" style="max-width:180px"><option value="15">15 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">24 hours</option><option value="0">Resume now</option></select><button onclick="setBlockingPause()">Apply</button><span class="pill" id="pausestate"></span></div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">✓</span> Allowlist &amp; exceptions</h2>
+        <div class="desc">Domains here are never blocked, no matter which blocklist matches them — the allowlist wins unconditionally. One per line, subdomains included automatically. Also fed by the "unblock" button in the query log and Analytics.</div>
+        <textarea id="allowlist" placeholder="dl.delivery.mp.microsoft.com&#10;assets1.xboxlive.com"></textarea>
+        <div class="row"><button onclick="saveAllowlist()">Save allowlist</button><span class="pill" id="allowmsg"></span></div>
       </div>
     </section>
 
@@ -350,8 +477,20 @@
     <section data-view="log" class="hidden">
       <div class="panel">
         <h2><span class="ic">≣</span> Query log <button class="ghost sm" style="margin-left:auto" onclick="flushCache()">Flush cache</button></h2>
-        <div class="desc">Live resolution history. Color shows how each query was answered.</div>
-        <div class="logwrap"><table><thead><tr><th>Time</th><th>Client</th><th>Name</th><th>Type</th><th>Rcode</th><th>Disposition</th><th>ms</th></tr></thead><tbody id="log"></tbody></table></div>
+        <div class="desc">Live resolution history. Filter by client, domain, record type, response, or disposition.</div>
+        <div class="row" style="margin-bottom:12px"><input id="logfilter" placeholder="Filter domain / client / type / response…" oninput="renderLogFilter()" style="max-width:460px"><button class="ghost sm" onclick="$('#logfilter').value='';renderLogFilter()">Clear</button></div>
+        <div class="logwrap"><table><thead><tr><th>Time</th><th>Client</th><th>Name</th><th>Type</th><th>Proto</th><th>Rcode</th><th>Disposition</th><th>ms</th><th></th></tr></thead><tbody id="log"></tbody></table></div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">⌕</span> Resolve a name</h2>
+        <div class="desc">Run a lookup through this resolver exactly as a client would — local records, zone forwarding, rewrites, blocking and cache all apply — and see the raw answer with timing.</div>
+        <div class="row">
+          <input id="res_name" placeholder="example.com" style="max-width:300px" onkeydown="if(event.key==='Enter')resolveName()">
+          <select id="res_type" style="max-width:110px"><option>A</option><option>AAAA</option><option>CNAME</option><option>MX</option><option>TXT</option><option>SRV</option><option>PTR</option><option>NS</option><option>SOA</option></select>
+          <button onclick="resolveName()">Resolve</button>
+          <span class="pill" id="res_meta"></span>
+        </div>
+        <div id="res_out" class="mono tag"></div>
       </div>
     </section>
 
@@ -376,6 +515,17 @@
         </div>
       </div>
       <div class="panel">
+        <h2><span class="ic">⌘</span> Client names</h2>
+        <div class="desc">Map client IP addresses to friendly names shown in the query log and analytics. One IP and name per line, separated by a comma.</div>
+        <textarea id="clientnames" class="mono" placeholder="192.168.1.25, Gaming PC&#10;192.168.1.40, Living room TV"></textarea>
+        <div class="row"><button onclick="saveClientNames()">Save client names</button><span class="pill" id="clientnamesmsg"></span></div>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">⛊</span> Configuration backup &amp; restore</h2>
+        <div class="desc">Export the full resolver configuration or restore a validated backup. Treat backups as secrets because they can contain API tokens and network details.</div>
+        <div class="row"><button onclick="downloadBackup()">Download backup</button><input type="file" id="backupfile" accept="application/json,.json" style="max-width:300px"><button class="danger" onclick="restoreBackup()">Restore backup</button></div>
+      </div>
+      <div class="panel">
         <h2><span class="ic">⛊</span> Client access control</h2>
         <div class="desc">Restrict who can query (LAN/VPN subnets), throttle abusive clients, and set per-VLAN policy. Empty ACL = allow all.</div>
         <label class="fld">Allowed client subnets (one CIDR per line, empty = all)</label>
@@ -398,7 +548,7 @@
         <div class="panel">
           <h2><span class="ic">⊘</span> Top blocked</h2>
           <div class="desc">Most-blocked names — tune your lists or launcher toggles from here.</div>
-          <table><thead><tr><th>Domain</th><th style="width:70px;text-align:right">Count</th></tr></thead><tbody id="an_blk"></tbody></table>
+          <table><thead><tr><th>Domain</th><th style="width:70px;text-align:right">Count</th><th style="width:70px"></th></tr></thead><tbody id="an_blk"></tbody></table>
         </div>
         <div class="panel">
           <h2><span class="ic">◉</span> Top clients</h2>
@@ -470,10 +620,10 @@ $$('#nav a').forEach(a=>a.onclick=()=>{
   $('#vtitle').textContent=t[0];$('#vsub').textContent=t[1];$('#aside').classList.remove('open');
   try{ if(v==='analytics')loadAnalytics(); }catch(e){ console.error('view load failed',e); }});
 
-let statsTimer,logTimer;
+let statsTimer,logTimer;let qpsHistory=[],lastQueryCount=null,lastStatsAt=0,CLIENT_NAMES={};
 async function boot(){
   await refreshStats();await refreshLog();
-  await Promise.all([loadCategories(),loadBlocklists(),loadZones(),loadUpstreams(),loadUsers(),loadAccess(),loadSettings(),loadRaw()]);
+  await Promise.all([loadCategories(),loadBlocklists(),loadAllowlist(),loadZones(),loadUpstreams(),loadUsers(),loadAccess(),loadSettings(),loadRaw()]);
   clearInterval(statsTimer);clearInterval(logTimer);
   statsTimer=setInterval(refreshStats,3000);logTimer=setInterval(refreshLog,4000);
   setInterval(()=>{ const s=document.querySelector('section[data-view="analytics"]');
@@ -485,7 +635,24 @@ function dur(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.fl
 async function refreshStats(){
   let s;try{s=await api('/api/stats');}catch{return;}
   CFG=s.config||CFG;
-  const st=s.stats,hit=st.queries?Math.round(100*(st.cacheHits+st.cacheStale)/st.queries):0;
+  const st=s.stats,now=Date.now();
+  const inst=Number(st.qps)||0;
+  if(lastQueryCount!==null&&now>lastStatsAt){
+    const measured=inst||Math.max(0,(st.queries-lastQueryCount)/((now-lastStatsAt)/1000));
+    qpsHistory.push(measured);if(qpsHistory.length>40)qpsHistory.shift();
+  }
+  lastQueryCount=st.queries;lastStatsAt=now;
+  $('#qpsvalue').textContent=inst.toFixed(1);
+  const qmax=Math.max(1,...qpsHistory),qspan=Math.max(1,qpsHistory.length-1);
+  const qx=i=>i*700/qspan, qy=v=>80-(v/qmax)*68;
+  const qpts=qpsHistory.map((v,i)=>`${qx(i).toFixed(1)},${qy(v).toFixed(1)}`).join(' ');
+  $('#qpsline').setAttribute('points',qpts||'0,80 700,80');
+  $('#qpsarea').setAttribute('points',`0,80 ${qpts||'700,80'} 700,80`);
+  const qlast=qpsHistory[qpsHistory.length-1]||0;
+  $('#qpsdot').setAttribute('cx',qpsHistory.length?qx(qpsHistory.length-1):700);
+  $('#qpsdot').setAttribute('cy',qy(qlast));
+  $('#qpspeak').textContent=qmax.toFixed(1);
+  const hit=Number(s.hitRate)>0?s.hitRate:(st.queries?Math.round(1000*(st.cacheHits+st.cacheStale)/st.queries)/10:0);
   $('#uptime').textContent='up '+dur(s.uptimeSec);
   const v6=s.ipv6||{};
   $('#ipv6state').innerHTML = v6.listening
@@ -493,6 +660,7 @@ async function refreshStats(){
     : (v6.configured ? '<span class="pill off">IPv6 '+(v6.reason||'down')+'</span>' : '<span class="pill">IPv6 off</span>');
   $('#cards').innerHTML=[
     ['Queries',fmt(st.queries),'','sig'],
+    ['Live q/s',(Number(st.qps)||0).toFixed(1),'right now','sig'],
     ['Cache hit rate',hit+'%',fmt(st.cacheHits)+' hits','blue'],
     ['Rewrites',fmt(st.rewrites),'to cache','sig'],
     ['Blocked',fmt(st.blocked),'&nbsp;',''],
@@ -519,13 +687,33 @@ function dispClass(d){d=d||'';if(d.startsWith('rewrite'))return'd-rewrite';
   if(d.startsWith('cache'))return'd-cache';if(d.startsWith('stale'))return'd-stale';if(d.startsWith('forward'))return'd-forward';
   if(d==='local')return'd-local';return'd-upstream';}
 async function refreshLog(){
-  let log;try{log=await api('/api/log?n=120');}catch{return;}
+  let log;try{log=await api('/api/log?n=120');if(!Object.keys(CLIENT_NAMES).length)CLIENT_NAMES=await api('/api/clients/names');}catch{return;}
   const rows=log.slice().reverse();
-  $('#log').innerHTML=rows.map(e=>`<tr><td class="tag">${new Date(e.t).toLocaleTimeString()}</td><td class="mono">${e.client}</td>
-    <td>${e.name}</td><td class="tag">${e.type}</td><td class="tag">${e.rcode}</td>
-    <td><span class="disp ${dispClass(e.disp)}">${e.disp||'—'}</span></td><td class="tag">${e.ms}</td></tr>`).join('')||'<tr><td colspan=7 class="empty">no queries yet</td></tr>';
+  $('#log').innerHTML=rows.map(e=>{
+    const blocked=(e.disp||'').startsWith('blocked');
+    const btn=blocked?`<button class="ghost sm" onclick="explainBlocked('${e.name.replace(/'/g,"\\'")}')">why?</button> <button class="ghost sm" onclick="unblockDomain('${blockedDomainFrom(e).replace(/'/g,"\\'")}')">unblock</button>`:'';
+    return `<tr><td class="tag">${new Date(e.t).toLocaleTimeString()}</td><td class="mono">${(CLIENT_NAMES||{})[e.client]?`${(CLIENT_NAMES||{})[e.client]} (${e.client})`:e.client}</td>
+    <td>${e.name}</td><td class="tag">${e.type}</td><td class="tag">${e.proto||'—'}</td><td class="tag">${e.rcode}</td>
+    <td><span class="disp ${dispClass(e.disp)}">${e.disp||'—'}</span></td><td class="tag">${e.ms}</td><td>${btn}</td></tr>`;
+  }).join('')||'<tr><td colspan=9 class="empty">no queries yet</td></tr>';
   $('#ov_log').innerHTML=rows.slice(0,12).map(e=>`<tr><td>${e.name}</td><td><span class="disp ${dispClass(e.disp)}">${e.disp||'—'}</span></td></tr>`).join('')||'<tr><td colspan=2 class="empty">waiting for traffic</td></tr>';
+  renderLogFilter();
 }
+function renderLogFilter(){const q=($('#logfilter')?.value||'').toLowerCase();document.querySelectorAll('#log tr').forEach(tr=>{tr.style.display=tr.textContent.toLowerCase().includes(q)?'':'none';});}
+async function resolveName(){
+  const name=$('#res_name').value.trim(),type=$('#res_type').value;
+  if(!name)return;
+  $('#res_meta').textContent='resolving…';$('#res_out').textContent='';
+  let r;try{r=await api('/api/resolve?name='+encodeURIComponent(name)+'&type='+encodeURIComponent(type));}
+  catch(e){$('#res_meta').textContent='lookup failed';return;}
+  if(r.error){$('#res_meta').textContent=r.error;return;}
+  const rows=(r.answers||[]).map(a=>`${a.name}  ${a.ttl}s  ${a.type}  ${typeof a.data==='object'?JSON.stringify(a.data):a.data}`);
+  $('#res_meta').innerHTML=`<span class="pill ${r.rcode==='NOERROR'&&rows.length?'on':'off'}">${r.rcode}${r.ad?' · valid':''}</span> <span class="tag">${r.ms} ms</span>`;
+  $('#res_out').textContent=rows.join('\n')||'(no answers — NODATA)';refreshLog();
+}
+const BLOCK_PRESETS={'hagezi-light':'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt','hagezi-pro':'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt','adguard-dns':'https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt','oisd-small':'https://small.oisd.nl/'};
+function addBlockPreset(){const k=$('#blpreset').value,url=BLOCK_PRESETS[k];if(!url)return;const lines=$('#bl').value.split('\n').map(x=>x.trim()).filter(Boolean);if(!lines.includes(url))lines.push(url);$('#bl').value=lines.join('\n');flash('Preset added; click Save & refresh to apply');}
+
 
 async function loadCategories(){
   CATS=await api('/api/category/full');
@@ -570,11 +758,37 @@ async function rmDomain(domain,cat){await api('/api/category/remove-domain',{met
 async function moveDomain(domain,from,to){if(!to)return;await api('/api/category/move-domain',{method:'POST',body:JSON.stringify({domain,from,to})});await loadCategories();flash(domain+' → '+to);}
 
 async function loadBlocklists(){const b=await api('/api/blocklists');$('#bl').value=(b.lists||[]).map(l=>l.url).join('\n');
-  const s=await api('/api/stats');$('#blockmode').value=(s.config&&s.config.blockedResponse)||'nxdomain';if(s.config&&s.config.blockPageIP)$('#blockpageip').value=s.config.blockPageIP;}
+  const s=await api('/api/stats');$('#blockmode').value=(s.config&&s.config.blockedResponse)||'nxdomain';if(s.config&&s.config.blockPageIP)$('#blockpageip').value=s.config.blockPageIP;if(s.config) {$('#sinkholeip').value=s.config.sinkholeIP||'';$('#sinkholeip6').value=s.config.sinkholeIPv6||'';$('#pausestate').textContent=(s.config.blockingPausedUntil||0)>Date.now()?'paused until '+new Date(s.config.blockingPausedUntil).toLocaleTimeString():'blocking active';}}
 async function saveBlocklists(){const lists=$('#bl').value.split('\n').map(s=>s.trim()).filter(Boolean).map(url=>({name:url.split('/').pop(),url,enabled:true}));
   flash('Validating & applying…');const r=await api('/api/blocklists',{method:'POST',body:JSON.stringify({lists})});flash((r.entries!=null?r.entries:'?')+' domains active');refreshStats();}
 async function refreshBlocklists(){flash('Refreshing…');const r=await api('/api/blocklists/refresh',{method:'POST'});flash((r.entries!=null?r.entries:'?')+' domains');refreshStats();}
-async function saveBlockMode(){await api('/api/settings',{method:'POST',body:JSON.stringify({blockedResponse:$('#blockmode').value,blockPageIP:$('#blockpageip').value.trim()})});flash('Block response saved');}
+async function saveBlockMode(){await api('/api/settings',{method:'POST',body:JSON.stringify({blockedResponse:$('#blockmode').value,blockPageIP:$('#blockpageip').value.trim(),sinkholeIP:$('#sinkholeip').value.trim(),sinkholeIPv6:$('#sinkholeip6').value.trim()})});flash('Block response saved');}
+async function explainBlocked(domain){try{const r=await api('/api/blocking/why?domain='+encodeURIComponent(domain));alert(domain+'\n\n'+r.explanation+(r.matchedRule?'\nMatched rule: '+r.matchedRule:''));}catch(e){flash('Could not explain block');}}
+async function setBlockingPause(){const minutes=Number($('#pausemins').value)||0;const r=await api('/api/blocking/pause',{method:'POST',body:JSON.stringify({minutes})});$('#pausestate').textContent=r.paused?'paused until '+new Date(r.until).toLocaleTimeString():'blocking active';flash(r.paused?'Blocking paused':'Blocking resumed');}
+async function saveClientNames(){const names={};for(const line of $('#clientnames').value.split('\n')){const i=line.indexOf(',');if(i>0){const ip=line.slice(0,i).trim(),name=line.slice(i+1).trim();if(ip&&name)names[ip]=name;}}await api('/api/clients/names',{method:'POST',body:JSON.stringify({names})});$('#clientnamesmsg').textContent='saved '+Object.keys(names).length;flash('Client names saved');}
+async function downloadBackup(){const r=await fetch('/api/backup',{headers:TOKEN?{'x-api-token':TOKEN}:{},credentials:'same-origin'});if(!r.ok){flash('Backup failed');return;}const blob=await r.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='stellardns-config-backup.json';a.click();URL.revokeObjectURL(url);}
+async function restoreBackup(){const f=$('#backupfile').files[0];if(!f){flash('Choose a backup file first');return;}if(!confirm('Restore this backup and replace current settings?'))return;try{const b=JSON.parse(await f.text());const r=await api('/api/backup/restore',{method:'POST',body:JSON.stringify(b)});flash(r.note||'Backup restored');setTimeout(()=>location.reload(),1200);}catch(e){flash('Restore failed: '+e.message);}}
+function toggleTheme(){const root=document.documentElement;const light=root.getAttribute('data-theme')!=='light';if(light)root.setAttribute('data-theme','light');else root.removeAttribute('data-theme');try{localStorage.setItem('sd-theme',light?'light':'dark')}catch{}$('#themebtn').textContent=light?'☾ Dark':'☼ Light';}
+try{if(localStorage.getItem('sd-theme')==='light'){document.documentElement.setAttribute('data-theme','light');document.addEventListener('DOMContentLoaded',()=>{if($('#themebtn'))$('#themebtn').textContent='☾ Dark';});}}catch{}
+async function loadAllowlist(){try{const a=await api('/api/blocklist/allowlist');$('#allowlist').value=(a||[]).join('\n');}catch{}}
+async function saveAllowlist(){
+  const domains=$('#allowlist').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  await api('/api/blocklist/allowlist',{method:'POST',body:JSON.stringify({domains})});
+  $('#allowmsg').textContent='saved '+domains.length;flash('Allowlist saved');
+}
+async function unblockDomain(d){
+  await api('/api/blocklist/allow',{method:'POST',body:JSON.stringify({domain:d})});
+  flash(d+' unblocked');
+  loadAllowlist();
+  refreshLog(); if(typeof loadAnalytics==='function'){const s=document.querySelector('section[data-view="analytics"]');if(s&&!s.classList.contains('hidden'))loadAnalytics();}
+}
+// extracts the actual blocklist match from a disposition like "blocked:doubleclick.net"
+// or "blocked-cname:ads.example.net" — that's the domain the allowlist needs, not
+// necessarily the full queried name.
+function blockedDomainFrom(e){
+  const m=/^blocked(?:-cname)?:(.+)$/.exec(e.disp||'');
+  return m?m[1]:e.name;
+}
 
 async function loadZones(){
   $('#lr').value=JSON.stringify(await api('/api/localrecords'),null,1);
@@ -629,7 +843,7 @@ async function addUser(){const username=$('#nu_user').value.trim(),password=$('#
 async function delUser(username){if(!confirm('Remove user '+username+'?'))return;await api('/api/users/delete',{method:'POST',body:JSON.stringify({username})});loadUsers();}
 async function changePw(){const newPassword=$('#pw_new').value;const r=await api('/api/passwd',{method:'POST',body:JSON.stringify({newPassword})});
   $('#pwmsg').textContent=r.ok?'updated':(r.error||'failed');if(r.ok){$('#pw_new').value='';flash('Password updated');}}
-async function loadAccess(){const s=await api('/api/stats');const c=s.config||{};
+async function loadAccess(){const s=await api('/api/stats');const c=s.config||{};try{const n=await api('/api/clients/names');$('#clientnames').value=Object.entries(n||{}).map(([ip,name])=>ip+', '+name).join('\n');}catch{}
   $('#acl').value=(c.clientAcl||[]).join('\n');$('#rl').value=c.rateLimitPerClientQps||0;
   const sp=await api('/api/subnetpolicies');$('#sp').value=JSON.stringify(sp,null,1);}
 async function saveAccess(){try{
@@ -669,7 +883,7 @@ async function loadAnalytics(){
   let a;try{a=await api('/api/analytics');}catch{return;}
   const rows=(arr,unit)=>arr.length?arr.map(x=>`<tr><td class="mono" style="font-size:12px">${x.name}</td><td class="mono" style="text-align:right">${x.count}</td></tr>`).join(''):`<tr><td colspan=2 class="empty">no data yet</td></tr>`;
   $('#an_dom').innerHTML=rows(a.topDomains);
-  $('#an_blk').innerHTML=rows(a.topBlocked);
+  $('#an_blk').innerHTML=a.topBlocked.length?a.topBlocked.map(x=>`<tr><td class="mono" style="font-size:12px">${x.name}</td><td class="mono" style="text-align:right">${x.count}</td><td><button class="ghost sm" onclick="unblockDomain('${x.name.replace(/'/g,"\\'")}')">unblock</button></td></tr>`).join(''):'<tr><td colspan=3 class="empty">no data yet</td></tr>';
   $('#an_cli').innerHTML=rows(a.topClients);
   const total=Object.values(a.byDisposition||{}).reduce((s,n)=>s+n,0)||1;
   const colors={cache:'var(--sig)',rewrite:'var(--blue)',blocked:'var(--red)','launcher-off':'var(--red)',forward:'var(--violet)',upstream:'var(--ink2)',stale:'var(--amber)',local:'var(--ink2)'};

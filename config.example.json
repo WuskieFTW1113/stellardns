@@ -87,5 +87,10 @@
   "dohPort": 8443,
   "blockPagePort": 8053,
   "dot": true,
-  "doh": true
+  "doh": true,
+  "blockAllowlist": [],
+  "sinkholeIP": "",
+  "sinkholeIPv6": "",
+  "blockingPausedUntil": 0,
+  "clientNames": {}
 }

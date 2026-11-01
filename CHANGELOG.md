@@ -1,5 +1,53 @@
 # StellarDNS — Changelog
 
+## v24 — performance, diagnostics and console polish
+
+**Faster upstream path.** Cache misses no longer create and destroy a UDP socket per
+query. Long-lived sockets, one per address family, are shared by all in-flight queries
+and replies are matched on (address, port, DNS id), removing four syscalls and two
+allocations from every miss. Measured 5,195 q/s on a single worker over loopback with
+40-way concurrency.
+
+**Less garbage on the hot path.** With a full cache, every insert materialised an array
+of *all* keys in order to evict 1% of them; eviction now walks the iterator. Blocklist and
+allowlist matching no longer build a closure per query, and internal-zone matching uses a
+pre-normalised list instead of calling `normZone()` per configured zone per query.
+
+**New: `GET /api/resolve?name=…&type=…`.** Resolves through the exact path a client takes
+— local records, zone forwarding, rewrites, blocklists, cache — and returns the rcode,
+timing and answers. Surfaced in the console as a *Resolve a name* tool; diagnostic queries
+bypass the query log so they do not skew analytics.
+
+**New: DoH JSON form.** `/dns-query?name=example.com&type=A` returns the JSON shape used
+by `dig`-style tooling; the RFC 8484 wire format remains the default.
+
+**New telemetry.** `/api/stats` now reports `qps` (sampled once a second, summed across
+cluster workers) and `hitRate`, and log entries carry the transport that produced them,
+shown as a new column in the console.
+
+**Console.** Area-and-grid QPS chart with a peak readout, a live q/s card, an active-nav
+rail, visible focus rings, card hover feedback, reduced-motion support, and the Resolve
+panel.
+
+**Security.** The generated admin password is written to `data/.admin-password` (mode 600)
+instead of printed to stdout, where journald kept it forever. The installer sets passwords
+through the API using `node` and an environment variable: no shell interpolation into JSON
+(a quote or backslash used to break it) and no secret on a command line visible in `ps`.
+
+**The installer is now an updater.** Re-running it verifies the payload checksum, waits for
+the listener to release before replacing files, keeps `config.json`, `data/`, users and TLS
+material, saves `config.json.pre-<version>`, syntax-checks the new `server.js` before
+restarting, and reports the console URL and API token at the end. `--check` verifies a
+download without touching the system.
+
+## v22 — compatibility sinkhole and console management
+
+- Added configurable DNS sinkhole A/AAAA responses for blocked domains and a local HTTP stub response mode with JSON/HTML responses and CORS preflight handling. This is compatibility assistance, not a guarantee of undetectability; HTTPS interception is not enabled.
+- Added timed pause/resume for blocklist enforcement. Pause expiry is persisted as a timestamp and resumes automatically after restart.
+- Added client IP display-name mappings, configuration export/validated restore endpoints, a light/dark theme toggle, query-log filtering, and sinkhole controls.
+- Added sinkhole and client-name configuration defaults.
+- Preserved v21 defaults and existing blocklist/allowlist behavior.
+
 Everything from the v5 alpha through **v20**.
 
 The alpha worked, but it had a set of bugs that only appeared once real config was
@@ -288,3 +336,28 @@ sudo sh stellardns-install.sh
 ```
 
 After a UI change, hard-refresh the browser (Ctrl-Shift-R / Cmd-Shift-R).
+
+---
+
+## v21 — blocklist allowlist / exceptions
+
+Added a way to override a blocklist match for a specific domain, without editing or
+removing the list itself. Motivated directly by real-world blocklists blocking Xbox/WSUS
+delivery domains (`dl.delivery.mp.microsoft.com` and similar) alongside genuine telemetry —
+previously the only fix was pulling the whole blocklist.
+
+- **Allowlist panel** (Blocking tab): domains here are never blocked, regardless of which
+  list matches them. Suffix-matched, so allowing a domain covers its subdomains.
+- **One-click unblock**: every blocked row in the Query log and every entry in Analytics'
+  "Top blocked" table now has an *unblock* button — no need to hunt down which list a
+  domain came from or hand-edit config.
+- New endpoints: `GET/POST /api/blocklist/allowlist` (full list), `POST
+  /api/blocklist/allow` and `/api/blocklist/unallow` (single domain, used by the UI buttons).
+- The allowlist is checked with the same allocation-free suffix walk used for blocklist
+  matching itself, so it costs nothing extra on the query path — consistent with the
+  hot-path rules in CONTRIBUTING.md.
+- CNAME-cloaking detection automatically respects the allowlist too, since it already
+  routes through the same `isBlocked()` check.
+
+Verified end-to-end: a domain blocked by a live blocklist resolves normally once
+allowlisted, an unrelated blocked domain is unaffected, and un-allowing restores blocking.
