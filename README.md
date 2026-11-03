@@ -1,6 +1,6 @@
 # StellarDNS
 
-![version](https://img.shields.io/badge/version-24.0.0-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational)
+![version](https://img.shields.io/badge/version-24.1.0-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
 
 A fast, gaming-oriented DNS resolver with a web console, built for homelabs.
 
@@ -19,16 +19,23 @@ Install             one script  Debian / Ubuntu / Alpine
 
 ---
 
-## What's new in v24
+## What's new in v24.1 — Spaceland
 
-- **Hedged upstreams** — a slow-but-alive forwarder no longer adds its full latency to
-  every query. See [the changelog](CHANGELOG.md) or [release notes](RELEASE-NOTES-v24.md).
-- **Internal names stay correct** — LAN names are TTL-clamped and never served stale, so
-  Bonjour devices stop renaming themselves to *"John's iPhone (192)"* after reconnecting.
-- **Zero-config sinkhole** — the block address is discovered from the default route, and the
-  stub answers in the shape the request asked for (real GIF/PNG, JS, CSS, JSON, 204).
-- **The installer is an updater** — re-running it upgrades in place, keeps your config, and
-  can be verified with `--check` before it touches anything.
+- **Stealth that doesn't look like a filter.** Blocked names answer from this host's address
+  *on the client's own subnet*, each with a TTL derived from the name (300–3600 s: stable per
+  name, different across names), NODATA carrying a synthetic SOA when a blocked AAAA has no
+  v6 sinkhole, and no Extended DNS Errors on any block path. The port-80 stub answers only
+  names that are actually blocked and returns `404` to everything else, so it is no longer an
+  oracle. See [Ad Blocking and the Sinkhole](wiki/Ad-Blocking-and-Sinkhole).
+- **One answer per outcome.** A CNAME-cloaked tracker used to NXDOMAIN while a plain ad hit
+  got a sinkhole address, which made the best-hidden blocks the easiest to detect. Both now
+  go through one function, and the block-page address can no longer leak into stealth mode.
+- **A sinkhole suite that checks the disagreements** — TTL variance, per-host gating, NODATA
+  shape and absence of block signalling, alongside the payload-shape checks.
+
+Earlier in the v24 line: hedged upstreams, internal-name TTL clamping, request-shaped stub
+payloads, and the installer-as-updater. See the [changelog](CHANGELOG.md) or
+[release notes](RELEASE-NOTES-v24.1.md).
 
 ---
 
@@ -310,7 +317,7 @@ rather than a mock.
 ```sh
 node test/smoke.js       # cache, rewrites, local records, socket pool, API endpoints
 node test/fastpath.js    # hedging (slow-but-alive upstream) and duplicate-RR removal
-node test/sinkhole.js    # auto address discovery and request-shaped stub payloads
+node test/sinkhole.js    # address discovery, request-shaped payloads, no fingerprint
 node test/simulate.js    # 1,202-query mixed workload: answers + latency distribution
 ```
 
@@ -397,6 +404,7 @@ curl -s -H "x-api-token: <token>" 'http://127.0.0.1:5380/api/resolve?name=<name>
 
 Hot-path changes should come with a number from `test/simulate.js` — see
 [CONTRIBUTING.md](CONTRIBUTING.md) for the rules that keep the per-query path allocation-free.
+Security issues should go through [SECURITY.md](SECURITY.md), not a public issue.
 
 ## License
 

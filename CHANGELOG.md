@@ -1,5 +1,35 @@
 # StellarDNS — Changelog
 
+## v24.1 — Spaceland
+
+**Stealth that doesn't look like a filter.** The sinkhole answered every blocked name from
+one address with a constant TTL of 60, and its port-80 stub replied to *any* Host header
+with a perfectly shaped ad beacon — both are fingerprints. Blocked A answers now come from
+this host's address on the client's own subnet, each name gets a stable TTL derived from
+the name itself (300–3600 s, deterministic, so asking twice proves nothing), a blocked
+AAAA with no `sinkholeIPv6` returns NODATA carrying a synthetic SOA the way a recursor
+would, and Extended DNS Errors are suppressed on every block path in stealth mode — EDE
+15/17 is a machine-readable "I filtered this".
+
+**One answer per block.** A CNAME-cloaked tracker used to NXDOMAIN while an ordinary hit got
+a sinkhole address, so the blocks that were hardest to explain were also the easiest to
+detect. Both paths now share `blockAnswer()`, and the block-page address can no longer leak
+into stealth mode as a fallback when interface discovery fails.
+
+**The stub is not an oracle.** It answers only names that are actually on a blocklist and
+returns `404` for everything else, instead of handing a valid ad-beacon response to any name
+pointed at the resolver.
+
+**Release packaging.** `SECURITY.md`, issue and PR templates, a CI job that runs the real
+suites instead of a single boot check, and consolidated v24.1 release notes.
+
+**Reporting.** `/api/stats` exposes `stealth: { mode, address, addresses[], stub80, fixed }`,
+and the Block response panel shows the detected sinkhole address and stub state next to the
+mode selector.
+
+The `test/sinkhole.js` suite grows from 7 checks to 11: per-host gating, blocked-AAAA NODATA,
+TTL variance across names, and TTL stability for one name.
+
 ## v24 — performance, diagnostics and console polish
 
 **Faster upstream path.** Cache misses no longer create and destroy a UDP socket per

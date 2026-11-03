@@ -1,9 +1,12 @@
 'use strict';
-/* Verifies the stealth sinkhole is zero-config and shape-correct:
+/* Verifies the stealth sinkhole is zero-config, shape-correct and not a fingerprint:
  *   - a blocked A query is answered with this host's own LAN address (no sinkholeIP set)
  *   - <img> beacons get a real GIF, not HTML
  *   - JSON beacons get JSON that parses, with CORS that survives credentials
  *   - script and preflight requests work
+ *   - the stub answers only names that are actually blocked
+ *   - a blocked AAAA without a v6 sinkhole is NODATA, not NXDOMAIN
+ *   - TTLs differ between names but are stable for one name
  *   - nothing in the responses mentions blocking
  */
 const path = require('path');
@@ -17,12 +20,13 @@ const ROOT = path.join(__dirname, '..');
 const DATA = path.join(ROOT, '.sinkhole-data');
 const DNS_PORT = 1073, WEB_PORT = 5392, LIST_PORT = 15410, STUB_PORT = 18073, FAKE_PORT = 15411;
 const TOKEN = 'sinkhole-token-0123456789';
+const BLOCKED = ['ads.test', 'tracker.test', 'pixel.test', 'metrics.test', 'beacon.test', 'promo.test'];
 
 fs.rmSync(DATA, { recursive: true, force: true });
 fs.mkdirSync(DATA, { recursive: true });
 
 // blocklist served locally so the test does not need the internet
-const listSrv = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ads.test\n'); });
+const listSrv = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(BLOCKED.join('\n') + '\n'); });
 listSrv.listen(LIST_PORT, '127.0.0.1');
 
 fs.writeFileSync(path.join(DATA, 'config.json'), JSON.stringify({
@@ -60,6 +64,8 @@ const get = (p) => new Promise((resolve, reject) => {
   req.on('error', reject); req.end();
 });
 
+// `headers.host` is the HTTP Host header — the gateway's own name is how a client that has
+// already resolved a blocked domain reaches the stub.
 function fetchStub(opts) {
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port: STUB_PORT, ...opts }, res => {
@@ -101,26 +107,41 @@ async function main() {
   check('unblocked name still resolves upstream', (r2.answers || [])[0]?.data === '203.0.113.9', `${(r2.answers || [])[0]?.data}`);
 
   // 3) image beacon gets a decodable GIF
-  const img = await fetchStub({ path: '/pixel.gif', method: 'GET', headers: { accept: 'image/webp,*/*' } });
+  const img = await fetchStub({ path: '/pixel.gif', method: 'GET', headers: { host: 'ads.test', accept: 'image/webp,*/*' } });
   const gifOk = img.body.subarray(0, 6).toString() === 'GIF89a' || img.body.subarray(0, 6).toString() === 'GIF87a';
   check('image beacon returns a real GIF', img.status === 200 && gifOk, `${img.status} ${img.headers['content-type']} ${img.body.length}B`);
 
   // 4) JSON beacon parses and is CORS-usable with credentials
-  const js = await fetchStub({ path: '/collect?e=1', method: 'POST', headers: { accept: 'application/json', origin: 'https://news.example' } });
+  const js = await fetchStub({ path: '/collect?e=1', method: 'POST', headers: { host: 'ads.test', accept: 'application/json', origin: 'https://news.example' } });
   let parsed = null; try { parsed = JSON.parse(js.body.toString()); } catch {}
   const corsOk = js.headers['access-control-allow-origin'] === 'https://news.example' &&
                  js.headers['access-control-allow-credentials'] === 'true';
   check('JSON beacon parses with credentialed CORS', js.status === 200 && !!parsed && corsOk, `${js.status} acao=${js.headers['access-control-allow-origin']}`);
 
   // 5) script beacon is valid JS, not HTML
-  const sc = await fetchStub({ path: '/tag.js', method: 'GET', headers: { accept: '*/*' } });
+  const sc = await fetchStub({ path: '/tag.js', method: 'GET', headers: { host: 'ads.test', accept: '*/*' } });
   check('script beacon returns javascript', /javascript/.test(sc.headers['content-type'] || '') && sc.status === 200, sc.headers['content-type']);
 
   // 6) preflight
-  const pf = await fetchStub({ path: '/collect', method: 'OPTIONS', headers: { origin: 'https://news.example', 'access-control-request-headers': 'content-type,x-custom' } });
+  const pf = await fetchStub({ path: '/collect', method: 'OPTIONS', headers: { host: 'ads.test', origin: 'https://news.example', 'access-control-request-headers': 'content-type,x-custom' } });
   check('preflight returns 204 with echoed headers', pf.status === 204 && /x-custom/.test(pf.headers['access-control-allow-headers'] || ''), `${pf.status}`);
 
-  // 7) nothing says "blocked"
+  // 7) the stub is not an open oracle: a name that is not blocked gets a plain 404
+  const nb = await fetchStub({ path: '/collect?e=1', method: 'GET', headers: { host: 'shop.example', accept: 'application/json' } });
+  check('stub refuses names that are not blocked', nb.status === 404 && !/ads|impression/.test(nb.body.toString()), `${nb.status} ${nb.body.length}B`);
+
+  // 8) a blocked AAAA with no sinkholeIPv6 is NODATA, not NXDOMAIN
+  const v6 = await get('/api/resolve?name=ads.test&type=AAAA');
+  check('blocked AAAA without a v6 sinkhole is NODATA', v6.rcode === 'NOERROR' && (v6.answers || []).length === 0, `${v6.rcode} ${(v6.answers || []).length} answers`);
+
+  // 9) TTL is not a constant: distinct per name, stable for one name
+  const ttls = [];
+  for (const n of BLOCKED) { const x = await get(`/api/resolve?name=${n}&type=A`); ttls.push((x.answers || [])[0]?.ttl); }
+  const again = ((await get('/api/resolve?name=ads.test&type=A')).answers || [])[0]?.ttl;
+  check('per-name TTL differs across domains', new Set(ttls).size > 1, ttls.join(','));
+  check('per-name TTL is stable for one domain', again === ttls[0], `${ttls[0]} vs ${again}`);
+
+  // 10) nothing says "blocked"
   const txt = (img.body.toString('latin1') + js.body.toString() + sc.body.toString()).toLowerCase();
   check('no response leaks that it is a block', !txt.includes('blocked') && !txt.includes('stellardns'), `${txt.length} chars scanned`);
 
@@ -128,7 +149,7 @@ async function main() {
   try { fake.close(); } catch {}
   try { listSrv.close(); } catch {}
   fs.rmSync(DATA, { recursive: true, force: true });
-  console.log(`\n  ${7 - fails} passed, ${fails} failed`);
+  console.log(`\n  ${11 - fails} passed, ${fails} failed`);
   process.exit(fails ? 1 : 0);
 }
 

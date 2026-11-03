@@ -1189,7 +1189,11 @@ async function resolveUpstream(question, forcedUpstreams, clientIP) {
       type: 'query', id: Math.floor(Math.random() * 65535), flags: dnsPacket.RECURSION_DESIRED,
       questions: [{ type: question.type, name: wireName }],
       additionals: [{ type: 'OPT', name: '.', udpPayloadSize: config.dns.ednsUdpSize,
-        flags: config.dnssec !== 'off' ? 32768 : 0,   // DO bit
+        // DO only when the client asked for it, or when we are the one who must validate.
+        // Setting it unconditionally pulled RRSIGs into every answer and every cache entry
+        // for clients that never requested them: bytes on the wire, and past the UDP limit,
+        // a needless reintroduction of the TCP round trip this resolver exists to avoid.
+        flags: (question._wantDnssec === true || config.dnssec === 'strict') ? 32768 : 0,
         options: (() => { const o = up ? [cookieOption(up)] : []; if (config.ecs === true) { const e = ecsOption(clientIP); if (e) o.push(e); } if (config.dnsCookies === false && up) o.shift(); return o; })() }]
     });
     const order = forcedUpstreams && forcedUpstreams.length ? [...forcedUpstreams].sort((a,b)=>a.srtt-b.srtt) : pickUpstreams();
@@ -1387,7 +1391,92 @@ function autoSinkholeIP() {
 }
 try { probeRoutedIP(); } catch {}
 setInterval(probeRoutedIP, 60000).unref();
-function sinkholeAddress() { return config.sinkholeIP || autoSinkholeIP() || ''; }
+
+// ---------------------------------------------------------------- stealth dynamics
+// A sinkhole that answers every blocked name with one constant address and one constant
+// TTL is barely better than NXDOMAIN: the reply is uniform, so ten blocked zones look like
+// one machine. These helpers remove the constants without keeping any per-query state.
+//
+// The interface table is cached for 30 s: it changes when DHCP moves the host, not when a
+// query arrives, and enumerating interfaces is far too expensive for the query path.
+let _ifCache = null, _ifAt = 0;
+function localV4Interfaces() {
+  if (_ifCache && Date.now() - _ifAt < 30000) return _ifCache;
+  const out = [];
+  try {
+    for (const [name, list] of Object.entries(os.networkInterfaces())) {
+      if (VIRTUAL_IFACE.test(name)) continue;        // docker0, tailscale0, tun0 …
+      for (const ni of (list || [])) {
+        if (ni.internal || ni.family !== 'IPv4' || !isPrivateV4(ni.address)) continue;
+        out.push({ name, address: ni.address, netmask: ni.netmask || '' });
+      }
+    }
+  } catch {}
+  _ifCache = out; _ifAt = Date.now();
+  return out;
+}
+function sameSubnet(a, b, netmask) {
+  if (!netmask || netmask.indexOf('.') === -1) return false;
+  const m = ipToLong(netmask);
+  return m !== 0 && (ipToLong(a) & m) === (ipToLong(b) & m);
+}
+// Hand out the resolver's own address *on the client's subnet*. A box serving two VLANs has
+// one address the kernel would pick for the internet and one per other VLAN; handing a
+// client an address it cannot route to is the one thing a sinkhole must not do, because a
+// dead address is a failed connection — exactly the symptom blocking is supposed to hide.
+function sinkholeAddressFor(client) {
+  const fixed = String(config.sinkholeIP || '').trim();
+  if (fixed) return fixed;                          // explicit config always wins
+  if (client && client.indexOf('.') !== -1) {
+    for (const ni of localV4Interfaces()) if (sameSubnet(client, ni.address, ni.netmask)) return ni.address;
+  }
+  return autoSinkholeIP() || '';
+}
+function sinkholeAddress() { return sinkholeAddressFor(null); }
+
+// A constant TTL is a fingerprint: ten blocked names answered with TTL 60 are visibly the
+// same machine. Derive it from the name, so it is stable for a domain (nothing to observe
+// by asking twice) but differs across domains, in the 300–3600 s range real zones use.
+function stealthTtl(name) {
+  let h = 2166136261;
+  for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return 300 + ((h >>> 0) % 56) * 60;               // 300 … 3600
+}
+
+// A recursor's NODATA carries the zone's SOA; a filter's NODATA normally carries nothing.
+// Synthesising the SOA for the closest plausible zone makes a blocked AAAA — or any
+// unsupported type on a blocked name — look like an ordinary "no data here" answer.
+function negativeSoa(qname) {
+  const labels = qname.split('.');
+  const zone = labels.length > 2 ? labels.slice(-2).join('.') : qname;
+  return { name: zone, type: 'SOA', ttl: 900, class: 'IN', data: {
+    mname: `ns1.${zone}`, rname: `hostmaster.${zone}`, serial: 1,
+    refresh: 10800, retry: 3600, expire: 604800, minimum: 300 } };
+}
+
+// One place decides what a blocked name answers, so every block path agrees. `matchTag` is
+// the list entry (or CNAME) that caused it and only reaches the query log.
+function blockAnswer(q, meta, matchTag) {
+  const mode = config.blockedResponse;
+  const ttl = stealthTtl(q.name);
+  if (mode === 'blockpage' && config.blockPageIP && q.type === 'A') {
+    return { rcode: 'NOERROR', answers: [{ name: q.name, type: 'A', ttl: 60, data: config.blockPageIP }], disp: `blocked-page:${matchTag}` };
+  }
+  if (mode === 'sinkhole') {
+    if (q.type === 'A' || q.type === 'AAAA') {
+      // Never fall back to blockPageIP here: in stealth mode that hands out the address of
+      // the page that says "Blocked by StellarDNS", which defeats the whole exercise.
+      const ip = q.type === 'A' ? sinkholeAddressFor(meta.client) : String(config.sinkholeIPv6 || '').trim();
+      if (ip) return { rcode: 'NOERROR', answers: [{ name: q.name, type: q.type, ttl, data: ip }], disp: `blocked-sinkhole:${matchTag}` };
+    }
+    return { rcode: 'NOERROR', answers: [], authorities: [negativeSoa(q.name)], disp: `blocked-sinkhole-nodata:${matchTag}` };
+  }
+  if (mode === 'zeroip' && (q.type === 'A' || q.type === 'AAAA')) {
+    const data = q.type === 'A' ? '0.0.0.0' : '::';
+    return { rcode: 'NOERROR', answers: [{ name: q.name, type: q.type, ttl: 300, data }], disp: `blocked:${matchTag}` };
+  }
+  return { rcode: 'NXDOMAIN', answers: [], disp: `blocked:${matchTag}`, ede: edeOption(EDE.FILTERED, `blocklist: ${matchTag}`) };
+}
 
 // A 1x1 GIF and PNG: real, decodable images. Returning HTML for an <img> beacon is a
 // one-line detector, so the response has to match what the request asked for.
@@ -1426,6 +1515,14 @@ function stubPayload(req) {
 // Shape-correct, boring, and identical whether or not the domain is on a blocklist. Nothing
 // in the response says "blocked" — that is the difference between a sinkhole and a block page.
 function stubHandler(req, res) {
+  // Answer only names that are actually blocked. An open stub is trivially discoverable:
+  // point any name at the resolver and request /collect — a perfect ad-beacon reply from a
+  // host that should have nothing there is a louder tell than NXDOMAIN ever was.
+  const host = String(req.headers.host || '').split(':')[0].toLowerCase().replace(/\.$/, '');
+  if (host && net.isIP(host) === 0 && !blockReasons.has(host) && !isBlocked(host)) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end('Not Found\n');
+  }
   const origin = req.headers.origin;
   const h = {
     'access-control-allow-origin': origin || '*',
@@ -1620,6 +1717,10 @@ function randomizeCase(name) {
   for (const ch of name) out += (/[a-z]/i.test(ch) && Math.random() < 0.5) ? (ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase()) : ch;
   return out;
 }
+// Types that exist only to accompany other answers. Stripped unless the client set DO; a
+// client that asks for one of these explicitly still gets it (see the q.type check below).
+const AUX_DNSSEC_TYPES = new Set(['RRSIG', 'NSEC', 'NSEC3', 'NSEC3PARAM']);
+
 function normalizeAnswers(answers) {
   // Exact duplicate RRs are not harmless: mDNS/Bonjour clients read two identical answers
   // for one name as an address conflict and rename themselves ("John's iPhone (192)").
@@ -1718,10 +1819,21 @@ async function handleQuery(msg, meta) {
   try { query = dnsPacket.decode(msg); } catch { return null; }
   if (!query.questions || !query.questions.length) return null;
   const q = { name: query.questions[0].name.toLowerCase(), type: query.questions[0].type };
+  // Recorded from the client's OPT because the response is built far below, and because
+  // resolveUpstream has to know what to ask upstream for on this query's behalf.
+  const _qopt = (query.additionals || []).find(a => a.type === 'OPT');
+  q._wantDnssec = !!(_qopt && (_qopt.flags & 0x8000));
   stats.queries++;
   const t0 = Date.now();
-  const respond = (rcode, answers, disp, edeOpt, adFlag) => {
+  const respond = (rcode, answers, disp, edeOpt, adFlag, authorities) => {
     if (!meta.noLog) logQuery({ t: Date.now(), client: meta.client, proto: meta.proto, name: q.name, type: q.type, rcode, disp, ms: Date.now() - t0 });
+    // A stealth block must not describe itself. EDE 15/17 is a machine-readable "I filtered
+    // this", so in sinkhole/zeroip mode no block path may attach one — including the paths
+    // that still have to answer NXDOMAIN, like a disabled launcher or a blockAll policy.
+    if (edeOpt && (config.blockedResponse === 'sinkhole' || config.blockedResponse === 'zeroip')) {
+      const d = String(disp || '');
+      if (d.startsWith('blocked') || d.startsWith('launcher-off') || d.startsWith('rebind') || d.startsWith('policy:blockAll')) edeOpt = undefined;
+    }
     // Clamp the TTL we hand back for internal names, not just the time we keep them: a device
     // that receives a 1-hour TTL for its own name will cache its old address itself, and no
     // amount of cache hygiene here can reach that copy.
@@ -1734,10 +1846,18 @@ async function handleQuery(msg, meta) {
       | (dnsPacket.AUTHORITATIVE_ANSWER * (disp === 'local' || (disp || '').startsWith('rewrite') ? 1 : 0))
       | (RCODES[rcode] ?? 0)
       | (adFlag ? dnsPacket.AUTHENTIC_DATA : 0);
+    // A client that never set DO has no use for signatures or NSEC proofs. Sending them
+    // anyway inflates the answer, and inflation is what pushes an ordinary CDN reply past
+    // the UDP limit into a forced TCP retry — which the client experiences as slowness.
+    if (!q._wantDnssec && answers && answers.length) {
+      answers = answers.filter(a => String(a.type).toUpperCase() === String(q.type).toUpperCase()
+        || !AUX_DNSSEC_TYPES.has(String(a.type).toUpperCase()));
+    }
     let wire = dnsPacket.encode({
       type: 'response', id: query.id, flags,
       questions: query.questions,
       answers: answers || [],
+      authorities: authorities || [],
       additionals: [{ type: 'OPT', name: '.', udpPayloadSize: config.dns.ednsUdpSize }]
     });
     if (edeOpt) wire = appendEdnsOptions(wire, [edeOpt]);   // raw-append EDE (dns-packet can't encode it)
@@ -1884,22 +2004,8 @@ async function handleQuery(msg, meta) {
   if (blockedBy) {
     stats.blocked++;
     noteBlock(q.name, `matched blocklist entry '${blockedBy}'`);
-    if (config.blockedResponse === 'blockpage' && config.blockPageIP && q.type === 'A') {
-      return respond('NOERROR', [{ name: q.name, type: 'A', ttl: 60, data: config.blockPageIP }], `blocked:${blockedBy}`);
-    }
-    if (config.blockedResponse === 'sinkhole') {
-      if (q.type === 'A' || q.type === 'AAAA') {
-        const ip = q.type === 'A' ? (sinkholeAddress() || config.blockPageIP || '') : (config.sinkholeIPv6 || '');
-        if (ip) return respond('NOERROR', [{ name: q.name, type: q.type, ttl: 60, data: ip }], `blocked-sinkhole:${blockedBy}`);
-      }
-      // NODATA is less conspicuous than NXDOMAIN for unsupported RR types or an unconfigured address family.
-      return respond('NOERROR', [], `blocked-sinkhole-nodata:${blockedBy}`);
-    }
-    if (config.blockedResponse === 'zeroip' && (q.type === 'A' || q.type === 'AAAA')) {
-      const data = q.type === 'A' ? '0.0.0.0' : '::';
-      return respond('NOERROR', [{ name: q.name, type: q.type, ttl: 300, data }], `blocked:${blockedBy}`);
-    }
-    return respond('NXDOMAIN', [], `blocked:${blockedBy}`, edeOption(EDE.FILTERED, `blocklist: ${blockedBy}`));
+    const ans = blockAnswer(q, meta, blockedBy);
+    return respond(ans.rcode, ans.answers, ans.disp, ans.ede, null, ans.authorities);
   }
 
   // 3.5) AAAA filtering for public names (IPv6 path avoidance)
@@ -1943,7 +2049,11 @@ async function handleQuery(msg, meta) {
     for (const a of answers) {
       if (!(Number(config.blockingPausedUntil || 0) > Date.now()) && a.type === 'CNAME' && isBlocked(String(a.data).toLowerCase())) {
         stats.blocked++;
-        return respond('NXDOMAIN', [], `blocked-cname:${a.data}`, edeOption(EDE.FILTERED, `cname-cloak: ${a.data}`));
+        noteBlock(q.name, `CNAME cloak: ${a.data}`);
+        // Same answer as any other block hit. A cloaked tracker that NXDOMAINs while an
+        // ordinary ad gets a sinkhole address is a map of which blocks to look at.
+        const ans = blockAnswer(q, meta, `cname:${a.data}`);
+        return respond(ans.rcode, ans.answers, ans.disp, ans.ede, null, ans.authorities);
       }
     }
     // DNS rebinding protection: external name resolving to a private IP, and not one of ours
@@ -1984,7 +2094,18 @@ const udp = dgram.createSocket('udp4');
 udp.on('message', async (msg, rinfo) => {
   const out = await handleQuery(msg, { client: rinfo.address, proto: 'udp' });
   if (!out) return;
-  if (out.length > config.dns.ednsUdpSize) {
+  // ednsUdpSize is what we advertise, not what the client agreed to receive. Respect the
+  // client's own EDNS buffer before truncating, or a client advertising 4096 gets a needless
+  // TC and a TCP round trip for an answer it could have taken whole. Only reached once the
+  // response already exceeds our advertised size, so the extra decode is on the rare path.
+  let udpLimit = config.dns.ednsUdpSize;
+  if (out.length > udpLimit) {
+    try {
+      const cOpt = (dnsPacket.decode(msg).additionals || []).find(a => a.type === 'OPT');
+      if (cOpt && cOpt.udpPayloadSize) udpLimit = Math.max(512, Math.min(4096, cOpt.udpPayloadSize));
+    } catch {}
+  }
+  if (out.length > udpLimit) {
     // truncate → client retries over TCP
     try {
       const dec = dnsPacket.decode(out);
@@ -2058,7 +2179,8 @@ function saveConfig(opts) {
   if (!opts.noBroadcast && !_savingConfig && global.__sdBroadcastReload) global.__sdBroadcastReload();
 }
 
-const APP_VERSION = '24.0.0';
+const APP_VERSION = '24.1.0';
+const APP_CODENAME = 'Spaceland';
 const webServer = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/index.html')) {
@@ -2097,7 +2219,7 @@ const webServer = http.createServer(async (req, res) => {
       sha = require('crypto').createHash('sha256').update(b).digest('hex').slice(0, 16);
     } catch {}
     return json(res, 200, {
-      name: 'stellardns', version: APP_VERSION, node: process.version, pid: process.pid,
+      name: 'stellardns', version: APP_VERSION, codename: APP_CODENAME, node: process.version, pid: process.pid,
       startedAt: new Date(startTime).toISOString(),
       uptimeSec: Math.floor((Date.now() - startTime) / 1000),
       server: { bytes, sha256_16: sha },
@@ -2117,6 +2239,13 @@ const webServer = http.createServer(async (req, res) => {
         hitRate: agg.queries ? Math.round(1000 * ((agg.cacheHits || 0) + (agg.cacheStale || 0)) / agg.queries) / 10 : 0,
         workers: all.length, uptimeSec: Math.floor((Date.now() - startTime) / 1000),
         cacheSize: agg.cacheSize || cache.size, blocklist: blockMeta, ipv6: ipv6State,
+        stealth: {
+          mode: config.blockedResponse,
+          address: sinkholeAddress(),
+          addresses: localV4Interfaces().map(n => n.address),
+          stub80: !!stubPort80,
+          fixed: !!config.sinkholeIP
+        },
         memory: { heapMB: Math.round(process.memoryUsage().heapUsed / 1048576),
                   rssMB: Math.round(process.memoryUsage().rss / 1048576),
                   budgetMB: config.cache.maxHeapMB || 512,

@@ -360,13 +360,25 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
       <div class="panel">
         <h2><span class="ic">⊘</span> Blocklists</h2>
         <div class="desc">AdGuard, hosts, or plain-domain format URLs — one per line. Lists are validated before applying; the last good version is kept for instant rollback if an update is malformed.</div>
-        <div class="row" style="margin-bottom:8px"><select id="blpreset" style="max-width:340px"><option value="">Choose a blocklist preset…</option><option value="hagezi-light">HaGeZi Multi LIGHT</option><option value="hagezi-pro">HaGeZi Multi PRO</option><option value="adguard-dns">AdGuard DNS filter</option><option value="oisd-small">OISD small</option></select><button class="ghost" onclick="addBlockPreset()">Add preset</button></div>
+        <div class="row" style="margin-bottom:8px"><select id="blpreset" onchange="showBlockPresetNote()" style="max-width:400px">
+          <option value="">Choose a filter category…</option>
+          <optgroup label="Ads only — leaves every site working">
+            <option value="safe-ads">Ads &amp; trackers only (recommended)</option>
+            <option value="oisd-small">OISD small</option>
+            <option value="hagezi-light">HaGeZi Multi LIGHT</option>
+          </optgroup>
+          <optgroup label="Full protection — may interfere with apps">
+            <option value="hagezi-pro">HaGeZi Multi PRO</option>
+            <option value="adguard-dns">AdGuard DNS filter</option>
+          </optgroup>
+        </select><button class="ghost" onclick="addBlockPreset()">Add category</button></div>
+        <div class="desc" id="blpresetnote"></div>
         <textarea id="bl" placeholder="https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt"></textarea>
         <div class="row"><button onclick="saveBlocklists()">Save &amp; refresh</button><button class="ghost" onclick="refreshBlocklists()">Refresh now</button><span class="pill" id="blmeta"></span></div>
       </div>
       <div class="panel">
         <h2><span class="ic">◱</span> Block response</h2>
-        <div class="desc">What a blocked domain returns. Block pages show the reason but only work cleanly over HTTP, or with a trusted internal CA for HTTPS.</div>
+        <div class="desc">What a blocked domain returns. Block pages show the reason but only work cleanly over HTTP, or with a trusted internal CA for HTTPS. Stealth mode answers from this host's address on the client's own subnet, gives every name a stable zone-like TTL, and refuses stub requests for names that are not blocked.</div>
         <div class="row">
           <select id="blockmode" style="max-width:220px">
             <option value="nxdomain">NXDOMAIN (silent)</option>
@@ -378,6 +390,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
           <input id="sinkholeip" placeholder="sinkhole IPv4" style="max-width:150px">
           <input id="sinkholeip6" placeholder="sinkhole IPv6 (optional)" style="max-width:180px">
           <button onclick="saveBlockMode()">Save</button>
+          <span class="pill" id="stealthstate"></span>
         </div>
       </div>
       <div class="panel">
@@ -711,8 +724,24 @@ async function resolveName(){
   $('#res_meta').innerHTML=`<span class="pill ${r.rcode==='NOERROR'&&rows.length?'on':'off'}">${r.rcode}${r.ad?' · valid':''}</span> <span class="tag">${r.ms} ms</span>`;
   $('#res_out').textContent=rows.join('\n')||'(no answers — NODATA)';refreshLog();
 }
-const BLOCK_PRESETS={'hagezi-light':'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt','hagezi-pro':'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt','adguard-dns':'https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt','oisd-small':'https://small.oisd.nl/'};
-function addBlockPreset(){const k=$('#blpreset').value,url=BLOCK_PRESETS[k];if(!url)return;const lines=$('#bl').value.split('\n').map(x=>x.trim()).filter(Boolean);if(!lines.includes(url))lines.push(url);$('#bl').value=lines.join('\n');flash('Preset added; click Save & refresh to apply');}
+// A category is a named set of lists applied together, so one click installs a coherent
+// policy instead of a pile of URLs. 'safe-ads' is the institution case: ad, tracking and
+// telemetry domains only — it never blocks a browsing destination.
+const BLOCK_PRESETS={
+ 'safe-ads':{label:'Ads & trackers only',lists:['https://small.oisd.nl/','https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=0&mimetype=plaintext'],note:'Blocks ad, tracking, telemetry and phishing domains. Does not block TikTok, Instagram, YouTube or any other destination — safe for a school or office network.'},
+ 'oisd-small':{label:'OISD small',lists:['https://small.oisd.nl/'],note:'“Block. Don’t break.” Ads and trackers with a low false-positive rate. Already included in Ads & trackers only.'},
+ 'hagezi-light':{label:'HaGeZi Multi LIGHT',lists:['https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/light.txt'],note:'Wider ad and tracker coverage than OISD small, still no site blocking.'},
+ 'hagezi-pro':{label:'HaGeZi Multi PRO',lists:['https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt'],note:'Adds scams, malware and annoyances to ads and trackers. Can break some apps and embedded content.'},
+ 'adguard-dns':{label:'AdGuard DNS filter',lists:['https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt'],note:'A bundle that includes AdGuard’s Social Media filter, so it can interfere with social apps and embeds. Not the institution choice.'}
+};
+function showBlockPresetNote(){const p=BLOCK_PRESETS[$('#blpreset').value];$('#blpresetnote').textContent=p?p.note:'';}
+function addBlockPreset(){
+  const p=BLOCK_PRESETS[$('#blpreset').value];if(!p)return;
+  const lines=$('#bl').value.split('\n').map(x=>x.trim()).filter(Boolean);
+  let added=0;for(const url of p.lists)if(!lines.includes(url)){lines.push(url);added++;}
+  $('#bl').value=lines.join('\n');showBlockPresetNote();
+  flash(added?p.label+': '+added+' list'+(added>1?'s':'')+' added; click Save & refresh to apply':p.label+' is already in the list');
+}
 
 
 async function loadCategories(){
@@ -758,8 +787,11 @@ async function rmDomain(domain,cat){await api('/api/category/remove-domain',{met
 async function moveDomain(domain,from,to){if(!to)return;await api('/api/category/move-domain',{method:'POST',body:JSON.stringify({domain,from,to})});await loadCategories();flash(domain+' → '+to);}
 
 async function loadBlocklists(){const b=await api('/api/blocklists');$('#bl').value=(b.lists||[]).map(l=>l.url).join('\n');
-  const s=await api('/api/stats');$('#blockmode').value=(s.config&&s.config.blockedResponse)||'nxdomain';if(s.config&&s.config.blockPageIP)$('#blockpageip').value=s.config.blockPageIP;if(s.config) {$('#sinkholeip').value=s.config.sinkholeIP||'';$('#sinkholeip6').value=s.config.sinkholeIPv6||'';$('#pausestate').textContent=(s.config.blockingPausedUntil||0)>Date.now()?'paused until '+new Date(s.config.blockingPausedUntil).toLocaleTimeString():'blocking active';}}
-async function saveBlocklists(){const lists=$('#bl').value.split('\n').map(s=>s.trim()).filter(Boolean).map(url=>({name:url.split('/').pop(),url,enabled:true}));
+  const s=await api('/api/stats');$('#blockmode').value=(s.config&&s.config.blockedResponse)||'nxdomain';if(s.config&&s.config.blockPageIP)$('#blockpageip').value=s.config.blockPageIP;if(s.config) {$('#sinkholeip').value=s.config.sinkholeIP||'';$('#sinkholeip6').value=s.config.sinkholeIPv6||'';$('#pausestate').textContent=(s.config.blockingPausedUntil||0)>Date.now()?'paused until '+new Date(s.config.blockingPausedUntil).toLocaleTimeString():'blocking active';}
+  const st=s.stealth,el=$('#stealthstate');if(el&&st)el.textContent=st.mode!=='sinkhole'?'':(st.fixed?'fixed ':'auto ')+((st.addresses||[]).join(' · ')||st.address||'no address')+(st.stub80?' · stub :80':' · stub :80 down');}
+// Readable list names: a query-string URL would otherwise be logged as "serverlist.php?...".
+function blName(url){try{const u=new URL(url),last=u.pathname.split('/').filter(Boolean).pop()||'';return u.hostname==='raw.githubusercontent.com'?(last||u.hostname):(last?u.hostname.replace(/^www\./,'')+'/'+last:u.hostname.replace(/^www\./,''));}catch{return url;}}
+async function saveBlocklists(){const lists=$('#bl').value.split('\n').map(s=>s.trim()).filter(Boolean).map(url=>({name:blName(url),url,enabled:true}));
   flash('Validating & applying…');const r=await api('/api/blocklists',{method:'POST',body:JSON.stringify({lists})});flash((r.entries!=null?r.entries:'?')+' domains active');refreshStats();}
 async function refreshBlocklists(){flash('Refreshing…');const r=await api('/api/blocklists/refresh',{method:'POST'});flash((r.entries!=null?r.entries:'?')+' domains');refreshStats();}
 async function saveBlockMode(){await api('/api/settings',{method:'POST',body:JSON.stringify({blockedResponse:$('#blockmode').value,blockPageIP:$('#blockpageip').value.trim(),sinkholeIP:$('#sinkholeip').value.trim(),sinkholeIPv6:$('#sinkholeip6').value.trim()})});flash('Block response saved');}
@@ -870,10 +902,14 @@ async function loadSettings(){const s=await api('/api/stats');const c=s.config||
   $('#settings-toggles').innerHTML=TOGGLES.map(([k,label,desc,def])=>{
     const on=settingOn(c,k,def);
     return `<div class="cat" style="align-items:flex-start"><div class="tg ${on?'on':''}" onclick="toggleSetting('${k}',this)" style="margin-top:2px"></div>
-    <div style="flex:1"><div style="font-weight:600">${label}</div><div class="tag" style="font-size:12px;color:var(--dim);margin-top:2px">${desc}</div></div></div>`;}).join('');
+    <div style="flex:1"><div style="font-weight:600">${label}${settingScope(c,k)}</div><div class="tag" style="font-size:12px;color:var(--dim);margin-top:2px">${desc}</div></div></div>`;}).join('');
 }
 function settingRaw(c,k){if(k==='serveStale'||k==='prefetch')return (c.cache||{})[k];return c[k];}
-function settingOn(c,k,def){const v=settingRaw(c,k);if(v===undefined)return !!def;return v===true;}
+// A setting may be `true`, `false`, or — for filterAAAA — an array of client CIDRs meaning
+// "on, but only for these clients". Treating that array as falsy showed scoped filtering as
+// OFF, and the next click replaced the scope with a blanket boolean.
+function settingOn(c,k,def){const v=settingRaw(c,k);if(v===undefined)return !!def;if(Array.isArray(v))return v.length>0;return v===true;}
+function settingScope(c,k){const v=settingRaw(c,k);return Array.isArray(v)&&v.length?` — scoped to ${v.join(', ')}`:'';}
 async function toggleSetting(k,el){const on=!el.classList.contains('on');el.classList.toggle('on',on);
   const body={};if(k==='serveStale'||k==='prefetch')body.cache={[k]:on};else body[k]=on;
   await api('/api/settings',{method:'POST',body:JSON.stringify(body)});flash(k+' '+(on?'on':'off'));}
