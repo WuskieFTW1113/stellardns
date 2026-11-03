@@ -26,7 +26,7 @@ Install             one script  Debian / Ubuntu / Alpine
   name, different across names), NODATA carrying a synthetic SOA when a blocked AAAA has no
   v6 sinkhole, and no Extended DNS Errors on any block path. The port-80 stub answers only
   names that are actually blocked and returns `404` to everything else, so it is no longer an
-  oracle. See [Ad Blocking and the Sinkhole]([wiki/Ad-Blocking-and-Sinkhole](https://github.com/WuskieFTW1113/stellardns/wiki/Ad-Blocking-and-Sinkhole)).
+  oracle. See [Ad Blocking and the Sinkhole](https://github.com/WuskieFTW1113/stellardns/wiki/Ad-Blocking-and-Sinkhole).
 - **One answer per outcome.** A CNAME-cloaked tracker used to NXDOMAIN while a plain ad hit
   got a sinkhole address, which made the best-hidden blocks the easiest to detect. Both now
   go through one function, and the block-page address can no longer leak into stealth mode.
