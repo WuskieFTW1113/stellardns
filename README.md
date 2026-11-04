@@ -19,23 +19,32 @@ Install             one script  Debian / Ubuntu / Alpine
 
 ---
 
-## What's new in v24.1 — Spaceland
+## What's new in v25 — Northstar
 
-- **Stealth that doesn't look like a filter.** Blocked names answer from this host's address
-  *on the client's own subnet*, each with a TTL derived from the name (300–3600 s: stable per
-  name, different across names), NODATA carrying a synthetic SOA when a blocked AAAA has no
-  v6 sinkhole, and no Extended DNS Errors on any block path. The port-80 stub answers only
-  names that are actually blocked and returns `404` to everything else, so it is no longer an
-  oracle. See [Ad Blocking and the Sinkhole](wiki/Ad-Blocking-and-Sinkhole).
-- **One answer per outcome.** A CNAME-cloaked tracker used to NXDOMAIN while a plain ad hit
-  got a sinkhole address, which made the best-hidden blocks the easiest to detect. Both now
-  go through one function, and the block-page address can no longer leak into stealth mode.
-- **A sinkhole suite that checks the disagreements** — TTL variance, per-host gating, NODATA
-  shape and absence of block signalling, alongside the payload-shape checks.
+- **Updates without SSH.** The console gained an Updates view: check GitHub, read the release
+  body, install, restart, roll back. The trust boundary is narrow — https only, a host
+  allowlist re-checked on every redirect, a 16 MB response cap, and `node --check` on the
+  staged `server.js` before it replaces a running one. The replaced files are kept in
+  `data/update/backup-<version>/` with a one-click rollback, and installation always needs a
+  click: the six-hourly check only fills the panel.
+- **A client for the machine that leaves the house.** `client/` is a loopback resolver with the
+  same blocklists, a TTL cache that never stores SERVFAIL, and DoH (RFC 8484, raw wire format)
+  with DoT as the fallback transport. On Windows it ships as an MSI with a notification-area
+  icon: closing the window hides it, and **Exit** restores your saved resolvers before the core
+  stops.
+- **Rules from the LAN.** The server publishes a portable ruleset at `GET /api/client/rules`;
+  the client finds it, previews every category and list, and imports only what you tick. A
+  server older than v25 is identified by its version and named, instead of being reported as
+  an empty network or a bare 404.
+- **Nothing rewrites your traffic unless you ask.** `rewritesEnabled` and `setSystemDns` both
+  default to `false`. An import saves targets without applying them, and the first-run DNS
+  question is asked once, with your current resolvers written down first.
+- **The client's loopback API refuses other websites.** Every write now requires a same-origin
+  `Origin`, a non-cross-site `Sec-Fetch-Site` and `application/json`, so a page you visit cannot
+  toggle blocking or repoint the encrypted upstreams.
 
-Earlier in the v24 line: hedged upstreams, internal-name TTL clamping, request-shaped stub
-payloads, and the installer-as-updater. See the [changelog](CHANGELOG.md) or
-[release notes](RELEASE-NOTES-v24.1.md).
+See the [release notes](RELEASE-NOTES-v25.md) for what was tested and how, or the
+[changelog](CHANGELOG.md) for the full list.
 
 ---
 
@@ -92,9 +101,12 @@ payloads, and the installer-as-updater. See the [changelog](CHANGELOG.md) or
 
 ### Single-file installer *(recommended)*
 
-Self-contained: source embedded, checksum-verified, no checkout required.
+Self-contained: source embedded, checksum-verified, no checkout required. It ships as a
+release asset, so the file you get always matches the tag it was published with.
 
 ```sh
+curl -fsSL https://github.com/WuskieFTW1113/stellardns/releases/latest/download/stellardns-install.sh \
+  -o stellardns-install.sh
 sudo sh stellardns-install.sh
 ```
 
@@ -108,6 +120,17 @@ sh stellardns-install.sh --version    # version + build stamp
 **Re-running it upgrades an existing install in place**: config, users, cache and TLS material
 are preserved, `config.json.pre-<version>` is kept as a rollback, and the new `server.js` is
 syntax-checked before the service restarts.
+
+### Windows client
+
+`StellarDNS-25.0.0-x64.msi` from the [latest release](https://github.com/WuskieFTW1113/stellardns/releases/latest)
+installs to `%ProgramFiles%\StellarDNS`, with a Start Menu shortcut and an uninstall that
+removes what it added. It installs no service and changes no DNS setting: the app asks once,
+on first launch, whether to use StellarDNS for this machine, and records your current
+resolvers before changing anything. Closing the window hides it to the tray; **Exit** puts
+those resolvers back before stopping the core.
+
+The MSI is unsigned, so Windows shows the usual SmartScreen prompt on first run.
 
 ### From source
 
