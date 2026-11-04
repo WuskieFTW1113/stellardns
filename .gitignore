@@ -1,0 +1,30 @@
+# runtime state — never commit
+data/
+config.json
+config.json.bak
+config.json.corrupt
+config.json.tmp.*
+*.log
+
+# dependencies
+node_modules/
+package-lock.json
+
+# build artifacts
+dist/
+*.tar.gz
+*.tgz
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# .NET build output (Windows client)
+bin/
+obj/
+client/windows/dist/
+
+# Local client state and smoke-test secrets — never commit them
+.smoke-data/

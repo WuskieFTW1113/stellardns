@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const dnsPacket = require('dns-packet');
 const cluster = require('cluster');
 const os = require('os');
+const { spawn, spawnSync } = require('child_process');
 
 // ---------------------------------------------------------------- config
 const DATA_DIR = process.env.STELLARDNS_DATA || path.join(__dirname, 'data');
@@ -81,6 +82,9 @@ const DEFAULT_CONFIG = {
     // { name: 'hagezi-pro', url: 'https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt', enabled: true }
   ],
   blocklistRefreshHours: 24,
+  // v25 console updates. `repo` is the only source the updater will talk to; the host
+  // allowlist in httpsGet() is what enforces that, not this string.
+  update: { channel: 'stable', repo: 'WuskieFTW1113/stellardns', autoCheck: true, checkIntervalHours: 6 },
   blockedResponse: 'nxdomain',    // 'nxdomain' | 'zeroip' | 'sinkhole' | 'blockpage'
   sinkholeIP: '',                // IPv4 address for sinkhole answers; configure to this host or a local sinkhole endpoint
   sinkholeIPv6: '',              // optional IPv6 sinkhole address
@@ -2179,8 +2183,211 @@ function saveConfig(opts) {
   if (!opts.noBroadcast && !_savingConfig && global.__sdBroadcastReload) global.__sdBroadcastReload();
 }
 
-const APP_VERSION = '24.1.0';
-const APP_CODENAME = 'Spaceland';
+const APP_VERSION = '25.0.0';
+const APP_CODENAME = 'Northstar';
+
+// ---------------------------------------------------------------- self-update
+// v25 can install a release from the console instead of SSH. The trust boundary is kept
+// narrow on purpose: https only, a fixed host list, a size cap, `node --check` on the new
+// server.js before it replaces a working one, and a backup that rollback can restore.
+const UPDATE_DIR = path.join(DATA_DIR, 'update');
+const UPDATE_STAGE = path.join(UPDATE_DIR, 'stage');
+const UPDATE_HOSTS = new Set(['api.github.com', 'raw.githubusercontent.com', 'github.com', 'objects.githubusercontent.com', 'codeload.github.com']);
+const UPDATE_MAX_BYTES = 16 * 1024 * 1024;
+const updateState = {
+  phase: 'idle', message: 'never checked', version: '', tag: '', startedAt: 0, finishedAt: 0,
+  available: null, log: []
+};
+function updateLog(m) {
+  const line = new Date().toISOString().slice(11, 19) + ' ' + m;
+  updateState.log.push(line);
+  if (updateState.log.length > 300) updateState.log.splice(0, updateState.log.length - 300);
+  console.log('[update] ' + m);
+}
+function updateRepo() { return (config.update && config.update.repo) || 'WuskieFTW1113/stellardns'; }
+function updateChannel() { return (config.update && config.update.channel) === 'beta' ? 'beta' : 'stable'; }
+// https.get with the host allowlist enforced on every hop, not just the first one.
+function httpsGet(url, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(url); } catch { return reject(new Error('bad url')); }
+    if (u.protocol !== 'https:') return reject(new Error('refused non-https url'));
+    if (!UPDATE_HOSTS.has(u.hostname)) return reject(new Error('refused host ' + u.hostname));
+    const req = https.get(u, { headers: { 'user-agent': 'stellardns-updater', accept: '*/*' }, timeout: 20000 }, res => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 4) {
+        res.resume();
+        return resolve(httpsGet(new URL(res.headers.location, u).toString(), redirects + 1));
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode + ' from ' + u.hostname)); }
+      const chunks = []; let n = 0;
+      res.on('data', c => {
+        n += c.length;
+        if (n > UPDATE_MAX_BYTES) { req.destroy(); reject(new Error('response larger than ' + UPDATE_MAX_BYTES + ' bytes')); }
+        else chunks.push(c);
+      });
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    req.on('error', reject);
+  });
+}
+function semverParts(v) {
+  return String(v).replace(/^v/i, '').split('-')[0].split('.')
+    .map(n => parseInt(n, 10) || 0).concat([0, 0]).slice(0, 3);
+}
+function cmpSemver(a, b) {
+  const x = semverParts(a), y = semverParts(b);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1;
+  return 0;
+}
+async function checkForUpdate() {
+  if (['checking', 'downloading', 'applying', 'restarting'].includes(updateState.phase)) {
+    throw new Error('an update operation is already running');
+  }
+  updateState.phase = 'checking'; updateState.message = 'contacting GitHub'; updateState.available = null;
+  try {
+    const raw = await httpsGet(`https://api.github.com/repos/${updateRepo()}/releases?per_page=20`);
+    let releases;
+    try { releases = JSON.parse(raw.toString('utf8')); } catch { throw new Error('GitHub returned unreadable JSON'); }
+    if (!Array.isArray(releases)) throw new Error((releases && releases.message) || 'unexpected GitHub API response');
+    if (updateChannel() !== 'beta') releases = releases.filter(r => !r.prerelease && !r.draft);
+    releases.sort((a, b) => cmpSemver(b.tag_name, a.tag_name));
+    const best = releases[0];
+    if (!best) {
+      updateState.phase = 'idle'; updateState.message = 'no published releases on ' + updateRepo();
+      return null;
+    }
+    const cmp = cmpSemver(best.tag_name, APP_VERSION);
+    updateState.available = {
+      version: String(best.tag_name).replace(/^v/i, ''), tag: best.tag_name, url: best.html_url || '',
+      publishedAt: best.published_at || '', prerelease: !!best.prerelease, channel: updateChannel(),
+      notes: String(best.body || '').slice(0, 8000), current: APP_VERSION, newer: cmp > 0
+    };
+    updateState.phase = 'idle';
+    updateState.message = cmp > 0 ? `v${updateState.available.version} is available`
+      : (cmp === 0 ? 'up to date' : 'running v' + APP_VERSION + ', newer than the published release');
+    updateLog('checked ' + updateRepo() + ' (' + updateChannel() + '): ' + updateState.message);
+    fs.mkdirSync(UPDATE_DIR, { recursive: true });
+    try { fs.writeFileSync(path.join(UPDATE_DIR, 'check.json'), JSON.stringify({ at: Date.now(), ...updateState.available }, null, 2)); } catch {}
+    return updateState.available;
+  } catch (e) {
+    updateState.phase = 'error'; updateState.message = e.message;
+    updateLog('check failed: ' + e.message);
+    return null;
+  }
+}
+function scheduleRestart() {
+  const systemd = fs.existsSync('/run/systemd/system');
+  const openrc = !systemd && fs.existsSync('/sbin/openrc-run');
+  const cmd = systemd ? 'systemctl restart stellardns' : (openrc ? 'rc-service stellardns restart' : '');
+  updateLog(cmd ? 'restarting via ' + cmd : 'no init system found — exiting for the supervisor to restart');
+  if (cmd) {
+    try { spawn('/bin/sh', ['-c', 'sleep 1; ' + cmd], { detached: true, stdio: 'ignore' }).unref(); } catch (e) { updateLog('restart spawn failed: ' + e.message); }
+  }
+  setTimeout(() => process.exit(0), 500);
+}
+async function applyUpdate(requested) {
+  if (['downloading', 'applying', 'restarting'].includes(updateState.phase)) throw new Error('an update is already running');
+  const a = updateState.available;
+  if (!a) throw new Error('run a check first — the updater only installs a version it has seen');
+  if (requested && requested !== a.version && requested !== a.tag) throw new Error('asked for ' + requested + ' but the last check found ' + a.version);
+  if (!a.newer) throw new Error('nothing newer than v' + APP_VERSION + ' to install');
+  const tag = a.tag;
+  updateState.phase = 'downloading'; updateState.message = 'fetching ' + tag;
+  updateState.startedAt = Date.now(); updateState.finishedAt = 0; updateState.log = [];
+  const base = `https://raw.githubusercontent.com/${updateRepo()}/${encodeURIComponent(tag)}`;
+  const files = [
+    { dest: 'server.js', url: base + '/server.js', check: true },
+    { dest: path.join('public', 'index.html'), url: base + '/public/index.html', check: false }
+  ];
+  try {
+    fs.rmSync(UPDATE_STAGE, { recursive: true, force: true });
+    fs.mkdirSync(UPDATE_STAGE, { recursive: true });
+    const staged = [];
+    for (const f of files) {
+      updateLog('downloading ' + f.dest);
+      const buf = await httpsGet(f.url);
+      if (!buf.length) throw new Error('empty ' + f.dest + ' in ' + tag);
+      const p = path.join(UPDATE_STAGE, f.dest.replace(/[\\/]/g, '_'));
+      fs.writeFileSync(p, buf);
+      staged.push({ ...f, path: p, size: buf.length, sha: crypto.createHash('sha256').update(buf).digest('hex') });
+      updateLog(`${f.dest}: ${buf.length} bytes, sha256 ${staged[staged.length - 1].sha.slice(0, 16)}`);
+    }
+    let sums = null;
+    try { sums = (await httpsGet(base + '/SHA256SUMS')).toString('utf8'); } catch {}
+    if (sums) {
+      for (const s of staged) {
+        const want = sums.split('\n').map(l => l.trim()).filter(Boolean)
+          .find(l => l.split(/\s+/).pop().replace(/^\*/, '') === s.dest.replace(/\\/g, '/'));
+        if (!want) throw new Error('SHA256SUMS has no entry for ' + s.dest);
+        if (want.split(/\s+/)[0].toLowerCase() !== s.sha) throw new Error('checksum mismatch for ' + s.dest);
+      }
+      updateLog('checksums verified against SHA256SUMS');
+    } else {
+      updateLog('no SHA256SUMS published in this tag — relying on TLS and the syntax check');
+    }
+    updateState.phase = 'applying'; updateState.message = 'validating';
+    const syntax = spawnSync(process.execPath, ['--check', staged[0].path], { encoding: 'utf8', timeout: 20000 });
+    if (syntax.status !== 0) {
+      throw new Error('new server.js failed node --check: ' + String(syntax.stderr || '').trim().split('\n').slice(0, 3).join(' '));
+    }
+    updateLog('node --check passed');
+    const backup = path.join(UPDATE_DIR, 'backup-' + APP_VERSION);
+    fs.mkdirSync(path.join(backup, 'public'), { recursive: true });
+    for (const f of files) {
+      const live = path.join(__dirname, f.dest);
+      if (fs.existsSync(live)) fs.copyFileSync(live, path.join(backup, f.dest));
+    }
+    fs.writeFileSync(path.join(backup, 'version.json'), JSON.stringify({ version: APP_VERSION, codename: APP_CODENAME, at: Date.now() }, null, 2));
+    updateLog('backup written to ' + backup);
+    for (const s of staged) {
+      const live = path.join(__dirname, s.dest);
+      const tmp = live + '.new';
+      fs.mkdirSync(path.dirname(live), { recursive: true });
+      fs.writeFileSync(tmp, fs.readFileSync(s.path));
+      fs.renameSync(tmp, live);
+      updateLog('installed ' + s.dest);
+    }
+    fs.writeFileSync(path.join(UPDATE_DIR, 'last.json'), JSON.stringify({ from: APP_VERSION, to: a.version, tag, at: Date.now(), backup }, null, 2));
+    updateState.phase = 'restarting'; updateState.message = 'installed v' + a.version + ' — restarting';
+    updateState.finishedAt = Date.now();
+    scheduleRestart();
+    return { ok: true, from: APP_VERSION, to: a.version, tag, backup, restarting: true };
+  } catch (e) {
+    updateState.phase = 'error'; updateState.message = e.message; updateState.finishedAt = Date.now();
+    updateLog('apply failed: ' + e.message);
+    throw e;
+  }
+}
+function rollbackUpdate() {
+  const p = path.join(UPDATE_DIR, 'last.json');
+  if (!fs.existsSync(p)) throw new Error('this console has not installed an update yet');
+  let last;
+  try { last = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { throw new Error('update journal is unreadable'); }
+  if (!last.backup || !fs.existsSync(path.join(last.backup, 'server.js'))) {
+    throw new Error('the backup for ' + (last.from || 'the previous version') + ' is missing');
+  }
+  for (const f of ['server.js', path.join('public', 'index.html')]) {
+    const src = path.join(last.backup, f);
+    if (!fs.existsSync(src)) continue;
+    const live = path.join(__dirname, f);
+    const tmp = live + '.rb';
+    fs.writeFileSync(tmp, fs.readFileSync(src));
+    fs.renameSync(tmp, live);
+  }
+  try { fs.unlinkSync(p); } catch {}
+  updateState.phase = 'restarting'; updateState.message = 'rolled back to v' + (last.from || '?');
+  updateLog('rolled back to v' + (last.from || '?'));
+  scheduleRestart();
+  return { ok: true, restored: last.from || 'previous', restarting: true };
+}
+function isAdminReq(req) {
+  const t = req.headers['x-api-token'];
+  if (t && config.web && t === config.web.apiToken) return true;
+  const who = sessionUser(req);
+  return !!(who && users[who] && users[who].role === 'admin');
+}
 const webServer = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/index.html')) {
@@ -2226,10 +2433,80 @@ const webServer = http.createServer(async (req, res) => {
       features: { resolve: true, dohJson: true, qps: true, protoInLog: true }
     });
   }
+  // --- LAN client discovery (v25) ---
+  // Deliberately unauthenticated: a client on the LAN has to find this box before it owns a
+  // token. It reveals the service name, version and whether auth is required — nothing that
+  // resolves a name or reads the policy.
+  if (u.pathname === '/api/client/ping' && req.method === 'GET') {
+    return json(res, 200, {
+      service: 'stellardns', version: APP_VERSION, codename: APP_CODENAME,
+      authRequired: true, rules: '/api/client/rules'
+    });
+  }
   if (!u.pathname.startsWith('/api/')) { res.writeHead(404); return res.end(); }
   if (!authOk(req)) return json(res, 401, { error: 'bad or missing token' });
 
   try {
+    // --- portable ruleset for LAN clients (v25) ---
+    // The client picks which parts to keep; this only reports what exists. Categories carry
+    // their target so a laptop resolves launcher names to the same cache as the LAN.
+    if (u.pathname === '/api/client/rules' && req.method === 'GET') {
+      const categories = {};
+      for (const [name, c] of Object.entries(config.categories || {})) {
+        categories[name] = {
+          enabled: !!c.enabled, target: c.target || '', target6: c.target6 || '',
+          domains: (c.domains || []).slice()
+        };
+      }
+      const blocklists = (config.blocklists || []).map(l => ({ name: l.name, url: l.url, enabled: l.enabled !== false }));
+      return json(res, 200, {
+        service: 'stellardns', version: APP_VERSION, codename: APP_CODENAME,
+        generatedAt: new Date().toISOString(), categories, blocklists,
+        allowlist: (config.blockAllowlist || []).slice(),
+        blockedResponse: config.blockedResponse || 'nxdomain',
+        counts: {
+          categories: Object.keys(categories).length,
+          domains: Object.values(categories).reduce((n, c) => n + c.domains.length, 0),
+          lists: blocklists.length,
+          allowlist: (config.blockAllowlist || []).length
+        }
+      });
+    }
+    // --- self-update (v25) ---
+    if (u.pathname === '/api/update/state' && req.method === 'GET') {
+      return json(res, 200, {
+        version: APP_VERSION, codename: APP_CODENAME, channel: updateChannel(), repo: updateRepo(),
+        autoCheck: !(config.update && config.update.autoCheck === false), state: updateState
+      });
+    }
+    if (u.pathname.startsWith('/api/update/')) {
+      // Installing code from the network is the most dangerous thing this server can do,
+      // so it is admin-only even when a non-admin token is otherwise valid.
+      if (!isAdminReq(req)) return json(res, 403, { error: 'admin role required for updates' });
+      if (u.pathname === '/api/update/check' && req.method === 'POST') {
+        const found = await checkForUpdate();
+        return json(res, found ? 200 : 502, { ok: !!found, available: found, state: updateState });
+      }
+      if (u.pathname === '/api/update/apply' && req.method === 'POST') {
+        const b = await readBody(req);
+        if (b.confirm !== 'update') return json(res, 400, { error: 'send {"confirm":"update"} to install' });
+        try { return json(res, 200, await applyUpdate(b.version)); }
+        catch (e) { return json(res, 400, { error: e.message, state: updateState }); }
+      }
+      if (u.pathname === '/api/update/rollback' && req.method === 'POST') {
+        try { return json(res, 200, rollbackUpdate()); }
+        catch (e) { return json(res, 400, { error: e.message }); }
+      }
+      if (u.pathname === '/api/update/channel' && req.method === 'POST') {
+        const b = await readBody(req);
+        if (!['stable', 'beta'].includes(b.channel)) return json(res, 400, { error: 'channel must be stable or beta' });
+        config.update = config.update || {};
+        config.update.channel = b.channel;
+        saveConfig();
+        return json(res, 200, { channel: b.channel });
+      }
+      return json(res, 404, { error: 'no such update endpoint' });
+    }
     if (u.pathname === '/api/stats') {
       const all = await (global.__sdAggStats ? global.__sdAggStats() : Promise.resolve([{ ...stats, cacheSize: cache.size }]));
       const agg = all.reduce((a, s) => { for (const k of Object.keys(s)) { if (typeof s[k] === 'number') a[k] = (a[k] || 0) + s[k];
@@ -2616,7 +2893,15 @@ const WORKER_COUNT = (() => {
 })();
 
 // one-time setup done ONCE in the primary before any worker forks (avoids races on users.json / cert)
-if (cluster.isPrimary) { ensureAdmin(); ensureCert(); try { registerSelfRecord(); } catch (e) { console.error('[self]', e.message); } }
+if (cluster.isPrimary) { ensureAdmin(); ensureCert(); try { registerSelfRecord(); } catch (e) { console.error('[self]', e.message); }
+  // v25: check for releases without being asked, but never install without a human.
+  if (!(config.update && config.update.autoCheck === false)) {
+    const everyMs = Math.max(1, Number((config.update && config.update.checkIntervalHours) || 6)) * 3600000;
+    const auto = () => { checkForUpdate().catch(e => console.error('[update] auto-check:', e.message)); };
+    setTimeout(auto, 20000).unref();
+    setInterval(auto, everyMs).unref();
+  }
+}
 
 if (cluster.isPrimary && WORKER_COUNT > 1) {
   console.log(`[cluster] master starting ${WORKER_COUNT} workers across ${os.cpus().length} cores`);

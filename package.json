@@ -1,6 +1,6 @@
 {
   "name": "stellardns",
-  "version": "24.1.0",
+  "version": "25.0.0",
   "description": "A fast gaming-oriented DNS resolver with hedged upstreams, a stealth sinkhole, client policies, analytics and a web console (Spaceland)",
   "main": "server.js",
   "scripts": {
@@ -35,6 +35,7 @@
   "files": [
     "server.js",
     "public/",
+    "client/",
     "systemd/",
     "ha/",
     "wiki/",

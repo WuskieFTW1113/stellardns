@@ -1,5 +1,93 @@
 # StellarDNS — Changelog
 
+## v25.0 — Northstar
+
+**Updates without SSH.** The console gained an Updates view: check GitHub, read the release
+body, install, restart, roll back. The trust boundary is narrow by construction — https only,
+a host allowlist re-checked on every redirect, a 16 MB response cap, `node --check` on the
+staged `server.js` before it replaces a running one, a backup of the replaced files in
+`data/update/backup-<version>/`, and a one-click rollback driven by `data/update/last.json`.
+`SHA256SUMS` is verified when the release publishes it, and the log says so explicitly when it
+does not. Auto-check runs every six hours and only fills the panel: installation always needs
+a click. New config block: `update: { channel, repo, autoCheck, checkIntervalHours }`.
+
+**Encrypted client.** `client/` is a loopback resolver for one machine: the same blocklists
+and suffix matching as the server, a TTL cache that never stores SERVFAIL, and DoH (RFC 8484,
+raw wire format) with DoT (RFC 7858) as the fallback transport. The GUI is a loopback HTTP
+server plus one HTML file, which is what lets WebView2, WebKit and WKWebView render the same
+UI. Shells: WPF + WebView2 on Windows, an AppImage plus `stellardns-client` for Linux, SwiftUI
++ Metal on macOS. System DNS changes are recorded before they are applied and restored on
+exit or with `restore-dns`. CLI: `run`, `status`, `test`, `block`, `unblock`, `refresh`,
+`set-dns`, `restore-dns`, `install-service`.
+
+**Rules from the LAN.** The server publishes a portable ruleset at `GET /api/client/rules`
+(authenticated) and identifies itself at `GET /api/client/ping` (unauthenticated, version
+only). The client discovers a server by sweeping the local /24, previews every category and
+list, and imports only the pieces selected — category rewrites with their targets, blocklist
+URLs and the allowlist — into its own `client.json`. Imported targets are inert until rewrites
+are switched on, a category imported while disabled stays disabled, and the preview starts
+with every category unchecked. A server older than v25 has no rules route and answers 401 to
+any path it does not know, which used to look like an empty network in discovery and a bare
+`HTTP 404` in the preview; discovery now identifies it from `/api/version` and says it needs
+v25, and the preview names the version instead of blaming the token. The client also gained a full options surface: upstream presets over DoH/DoT, block
+response, listen port, cache size, TTL bounds, system-DNS management and an allowlist editor,
+with a clear restart signal when an option needs one.
+
+**Nothing rewrites your traffic on its own.** Rewrites are the most intrusive feature in the
+product and the easiest way to break someone's evening, so `rewritesEnabled` defaults to
+`false` and `setSystemDns` does too. An import saves targets without applying them; the GUI
+asks separately (*Apply these rewrites on this machine*, off by default); the CLI never turns
+them on unless asked (`import --rewrites`, or `rewrites on|off|status`). Enabling is one
+switch, reversible without re-importing.
+
+**First run asks about DNS, once.** Installing the client does not repoint anything. The first
+launch shows one question - use StellarDNS for this machine? - with the current resolver saved
+before any change, so `restore-dns` and the Options toggle can put it back. On Windows the
+change goes through the UAC prompt and is verified by reading `netsh` back, because a standard
+user cannot set DNS and an exit code is not proof. Declining is remembered; the prompt does
+not return.
+
+**The loopback API refuses other websites.** The client's UI is a local HTTP server, and a page
+that POSTs to `127.0.0.1:5381` supplies the loopback `Host` header itself — so the rebinding
+check alone let any site the user visited toggle blocking or repoint the encrypted upstreams.
+Every write now requires a same-origin (or absent) `Origin`, a `Sec-Fetch-Site` that is not
+cross-site, and `application/json`, which a cross-site form or `no-cors` fetch cannot send
+without a preflight this server never answers.
+
+**Windows installer.** `client/windows/installer/wix` builds a per-machine MSI from the
+published client: `%ProgramFiles%\StellarDNS`, Start Menu shortcut, major upgrade, silent
+install/uninstall, about 1.1 MB with its own wizard art. The wizard keeps WiX's minimal flow
+but uses StellarDNS artwork (`art/make-art.ps1`) and copy (`Strings.wxl`) instead of the stock
+chrome. It installs no service and touches no DNS setting. WiX is pinned to v5 because v6+
+will not run without accepting its maintenance-fee EULA. The MSI is the only installer; there
+is no InstallShield project to keep in sync.
+
+**Two installer-only bugs, found by installing it.** Neither reproduces from the build tree.
+WebView2 puts its browser profile under `%ProgramFiles%` by default, which a standard user
+cannot write, so the runtime refused to create the window with `E_ACCESSDENIED` and the shell
+reported it as a missing runtime; the profile now lives in
+`%LOCALAPPDATA%\StellarDNS\WebView2`. And the published tree was missing
+`@leichtgewicht/ip-codec`, a dependency of `dns-packet` that always resolved from the
+repository's own `node_modules` during development — Node walks up the tree, so the staged copy
+looked complete while the installed one could not parse a packet. `publish.ps1` now stages the
+whole dependency tree, asserts the required entry points exist, and proves self-containment by
+running an encode/decode from a copy outside the repo. The same-version rebuild carries
+`AllowSameVersionUpgrades`, so a fixed 25.0.0 replaces a broken 25.0.0 instead of offering
+Repair.
+
+**Tray icon, and a real app icon.** Closing the window now hides to the notification area
+instead of stopping the resolver — with DNS pointed at the client, closing it would have left
+the machine resolving against a port nothing answers on. The tray menu opens the window, pauses
+or resumes blocking, restores the saved resolvers, and exits; exiting restores DNS first, then
+stops the core. The icon (`art/make-icon.ps1`) is a generated nine-size ICO embedded in the
+executable, so the window, taskbar, tray and Programs and Features all carry it rather than a
+generic .NET glyph, and the MSI sets it as the Programs and Features icon too.
+
+**GitHub Pages site.** `docs/index.html`, hand-written, no build step, published by
+`.github/workflows/pages.yml`.
+
+Upgrade: `Console → Updates` from v24.1, or re-run the installer. No config changes required.
+
 ## v24.1 — Spaceland
 
 **Stealth that doesn't look like a filter.** The sinkhole answered every blocked name from
