@@ -43,6 +43,16 @@ Install             one script  Debian / Ubuntu / Alpine
   `Origin`, a non-cross-site `Sec-Fetch-Site` and `application/json`, so a page you visit cannot
   toggle blocking or repoint the encrypted upstreams.
 
+### v25.0.1 — Polaris
+
+- **Plex clients can reach their server again.** `plex.direct` names are exempt from
+  rebinding protection. Plex publishes its LAN address as `<dashed-ip>.<hash>.plex.direct`,
+  a public name whose answer is a private IP by design; the rebind policy dropped it, so
+  clients got NXDOMAIN and reported the server unreachable while it answered locally in
+  under a millisecond. Public plex.direct answers were never affected, and anything else
+  resolving to a private address is still blocked. Details:
+  [RELEASE-NOTES-v25.0.1.md](RELEASE-NOTES-v25.0.1.md).
+
 See the [release notes](RELEASE-NOTES-v25.md) for what was tested and how, or the
 [changelog](CHANGELOG.md) for the full list.
 
@@ -63,6 +73,9 @@ See the [release notes](RELEASE-NOTES-v25.md) for what was tested and how, or th
 - Lists are validated before applying, with automatic rollback to the last good version.
 - CNAME-cloaking detection.
 - An **allowlist** for exceptions, with one-click *unblock* on any blocked row in the log.
+- **DNS rebinding protection** on by default: a public name answering with a private
+  address is refused unless it is your own rewrite, a local record, `plex.direct`, or a
+  suffix you add to `rebindingAllow`.
 - Block responses: NXDOMAIN, null route, a block page, or sinkhole answers with a local HTTP
   stub. Sinkhole mode defeats simple "did DNS fail?" checks; it cannot defeat HTTPS
   interception, certificate pinning or script-level verification. No DNS-layer tool can.
