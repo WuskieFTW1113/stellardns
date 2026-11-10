@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js"
+    "check": "node --check server.js",
+    "test:payload": "node test/payload.js"
   },
   "bin": {
     "stellardns": "server.js"
