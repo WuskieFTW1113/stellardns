@@ -1,6 +1,6 @@
 # StellarDNS
 
-![version](https://img.shields.io/badge/version-25.0.1-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
+![version](https://img.shields.io/badge/version-25.0.2-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
 
 A fast, gaming-oriented DNS resolver with a web console, built for homelabs.
 
@@ -42,6 +42,13 @@ Install             one script  Debian / Ubuntu / Alpine
 - **The client's loopback API refuses other websites.** Every write now requires a same-origin
   `Origin`, a non-cross-site `Sec-Fetch-Site` and `application/json`, so a page you visit cannot
   toggle blocking or repoint the encrypted upstreams.
+
+### v25.0.2 — Vega
+
+- **The Updates view survives an upgrade.** The console the installer carried was never in
+  the repository, so updating installed `server.js` plus an older `public/index.html` and
+  the Updates panel vanished. The v25 console is committed now, so the file an update
+  writes is one that contains the view it was opened from. Nothing else changed.
 
 ### v25.0.1 — Polaris
 
@@ -136,7 +143,7 @@ syntax-checked before the service restarts.
 
 ### Windows client
 
-`StellarDNS-25.0.1-x64.msi` from the [latest release](https://github.com/WuskieFTW1113/stellardns/releases/latest)
+`StellarDNS-25.0.2-x64.msi` from the [latest release](https://github.com/WuskieFTW1113/stellardns/releases/latest)
 installs to `%ProgramFiles%\StellarDNS`, with a Start Menu shortcut and an uninstall that
 removes what it added. It installs no service and changes no DNS setting: the app asks once,
 on first launch, whether to use StellarDNS for this machine, and records your current

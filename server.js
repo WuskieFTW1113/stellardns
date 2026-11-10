@@ -2186,8 +2186,8 @@ function saveConfig(opts) {
   if (!opts.noBroadcast && !_savingConfig && global.__sdBroadcastReload) global.__sdBroadcastReload();
 }
 
-const APP_VERSION = '25.0.1';
-const APP_CODENAME = 'Polaris';
+const APP_VERSION = '25.0.2';
+const APP_CODENAME = 'Vega';
 
 // ---------------------------------------------------------------- self-update
 // v25 can install a release from the console instead of SSH. The trust boundary is kept

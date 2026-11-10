@@ -272,6 +272,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
       <div class="nav-label">ADMINISTRATION</div>
       <a data-v="access"><span class="ic">⚿</span> Access &amp; users</a>
       <a data-v="settings"><span class="ic">⚙</span> Settings</a>
+      <a data-v="updates"><span class="ic">⤒</span> Updates</a>
     </nav>
     <div class="side-foot">
       <div><span class="dot"></span><span id="statusline">live</span></div>
@@ -589,6 +590,29 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
         <div class="row"><button class="ghost" onclick="loadRaw()">Reload</button></div>
       </div>
     </section>
+
+    <section data-view="updates" class="hidden">
+      <div class="panel">
+        <h2><span class="ic">⤒</span> Resolver updates</h2>
+        <div class="desc">Install a published release from GitHub without SSH. The new <span class="mono">server.js</span> is syntax-checked before it replaces the running one, the current files are backed up first, and the service restarts itself. Only https URLs on github.com and raw.githubusercontent.com are ever fetched.</div>
+        <div class="cards" id="upd_cards"></div>
+        <div class="row">
+          <button onclick="checkUpdate()" id="upd_check">Check for updates</button>
+          <button class="ghost" onclick="applyUpdate()" id="upd_apply" disabled>Install</button>
+          <button class="danger" onclick="rollbackUpdate()" id="upd_rollback">Roll back</button>
+          <select id="upd_channel" onchange="setUpdateChannel()" style="max-width:140px" title="stable skips pre-releases">
+            <option value="stable">stable</option><option value="beta">beta</option>
+          </select>
+        </div>
+        <div id="upd_msg" class="tag" style="margin-top:12px"></div>
+        <pre id="upd_log" class="mono tag" style="max-height:210px;overflow:auto;margin-top:10px;white-space:pre-wrap"></pre>
+      </div>
+      <div class="panel">
+        <h2><span class="ic">✦</span> Release notes</h2>
+        <div class="desc">The body of the GitHub release the check found.</div>
+        <div id="upd_notes" class="tag" style="white-space:pre-wrap;line-height:1.6">Run a check to load them.</div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -625,7 +649,8 @@ const TITLES={overview:['Overview','Live resolver status'],rewrites:['Rewrites &
   blocking:['Blocking','Blocklists and block responses'],zones:['Local & internal zones','Authoritative records and conditional forwarding'],
   upstreams:['Upstreams','Forwarder health and configuration'],log:['Query log','Live resolution history'],
   analytics:['Analytics','Top domains, clients and blocked names'],
-  access:['Access & users','Console accounts and client access control'],settings:['Settings','Protocol behavior and hardening']};
+  access:['Access & users','Console accounts and client access control'],settings:['Settings','Protocol behavior and hardening'],
+  updates:['Updates','Install a release without SSH']};
 $$('#nav a').forEach(a=>a.onclick=()=>{
   $$('#nav a').forEach(x=>x.classList.remove('active'));a.classList.add('active');
   const v=a.dataset.v;$$('section[data-view]').forEach(s=>s.classList.toggle('hidden',s.dataset.view!==v));
@@ -636,7 +661,7 @@ $$('#nav a').forEach(a=>a.onclick=()=>{
 let statsTimer,logTimer;let qpsHistory=[],lastQueryCount=null,lastStatsAt=0,CLIENT_NAMES={};
 async function boot(){
   await refreshStats();await refreshLog();
-  await Promise.all([loadCategories(),loadBlocklists(),loadAllowlist(),loadZones(),loadUpstreams(),loadUsers(),loadAccess(),loadSettings(),loadRaw()]);
+  await Promise.all([loadCategories(),loadBlocklists(),loadAllowlist(),loadZones(),loadUpstreams(),loadUsers(),loadAccess(),loadSettings(),loadRaw(),loadUpdate()]);
   clearInterval(statsTimer);clearInterval(logTimer);
   statsTimer=setInterval(refreshStats,3000);logTimer=setInterval(refreshLog,4000);
   setInterval(()=>{ const s=document.querySelector('section[data-view="analytics"]');
@@ -958,6 +983,62 @@ function appendGenerated(r){
   }catch(e){$('#genout').textContent='Add to Local records manually: '+JSON.stringify(r.records);}
 }
 async function loadRaw(){try{const s=await api('/api/stats');$('#rawcfg').value=JSON.stringify(s.config||{},null,2);}catch{}}
+
+// ---- v25 self-update -------------------------------------------------------
+// The server owns the whole operation: it fetches, verifies, backs up and restarts. The
+// console only polls state, so closing the tab mid-install cannot leave a half-written
+// server.js behind — the swap is a rename that already happened server-side.
+let UPD=null,UPD_POLL=null;
+function updBusy(st){return ['checking','downloading','applying','restarting'].includes(st.phase);}
+async function loadUpdate(){
+  let s;try{s=await api('/api/update/state');}catch{return;}
+  clearTimeout(UPD_POLL);UPD=s;
+  const st=s.state||{},a=st.available||{};
+  $('#upd_channel').value=s.channel||'stable';
+  const phaseTxt={idle:'idle',checking:'checking',downloading:'downloading',applying:'applying',restarting:'restarting',error:'error'}[st.phase]||st.phase||'idle';
+  $('#upd_cards').innerHTML=[
+    ['Running','v'+s.version,s.codename||'','sig'],
+    ['Published',a.version?('v'+a.version):'not checked',a.publishedAt?new Date(a.publishedAt).toLocaleDateString():'',''],
+    ['State',phaseTxt,s.autoCheck?'auto-check on':'auto-check off',st.phase==='error'?'amber':'']
+  ].map(([k,v,sub,c])=>`<div class="card"><div class="k">${k}</div><div class="v ${c||''}">${v}</div><div class="sub">${sub||'&nbsp;'}</div></div>`).join('');
+  $('#upd_msg').textContent=st.message||'';
+  $('#upd_log').textContent=(st.log||[]).slice(-40).join('\n');
+  $('#upd_notes').textContent=a.notes||'Run a check to load them.';
+  const busy=updBusy(st);
+  $('#upd_check').disabled=busy;
+  $('#upd_apply').disabled=busy||!a.newer;
+  $('#upd_rollback').disabled=st.phase==='downloading'||st.phase==='applying';
+  if(busy)UPD_POLL=setTimeout(loadUpdate,1500);
+}
+async function checkUpdate(){
+  flash('Checking GitHub…');
+  const r=await api('/api/update/check',{method:'POST'});
+  if(r.error)flash(r.error);
+  else if(r.available)flash(r.available.newer?('v'+r.available.version+' is available'):'Already up to date');
+  else flash((r.state&&r.state.message)||'Check failed');
+  loadUpdate();
+}
+async function applyUpdate(){
+  const a=UPD&&UPD.state&&UPD.state.available;
+  if(!a||!a.newer)return flash('Run a check first');
+  if(!confirm('Install v'+a.version+' now?\n\nThe resolver restarts, so DNS blips for about a second. Your config and data are not touched.'))return;
+  flash('Installing v'+a.version+'…');
+  const r=await api('/api/update/apply',{method:'POST',body:JSON.stringify({confirm:'update',version:a.version})});
+  if(r.error){flash(r.error);loadUpdate();return;}
+  flash('Installed v'+r.to+' — restarting');
+  setTimeout(()=>location.reload(),5000);
+}
+async function rollbackUpdate(){
+  if(!confirm('Restore the server.js and console this updater replaced?'))return;
+  const r=await api('/api/update/rollback',{method:'POST'});
+  if(r.error)flash(r.error);
+  else{flash('Rolled back to v'+r.restored);setTimeout(()=>location.reload(),5000);}
+}
+async function setUpdateChannel(){
+  const channel=$('#upd_channel').value;
+  await api('/api/update/channel',{method:'POST',body:JSON.stringify({channel})});
+  flash('Update channel: '+channel);loadUpdate();
+}
 
 (async()=>{
   try{const w=await(await fetch('/api/whoami',{credentials:'same-origin'})).json();if(w.authed){enter(w.user||'admin');return;}}catch{}

@@ -1,5 +1,15 @@
 # StellarDNS — Changelog
 
+## v25.0.2 — Vega
+
+**Updating to 25.0.1 removed the Updates view.** The updater replaces exactly two files
+from the tag: `server.js` and `public/index.html`. The console in the repository was an
+older build than the one the v25 installer shipped — 73,120 bytes against 77,001, with no
+Updates view — so applying 25.0.1 wrote that older console over a working one. The server
+was 25.0.1; the UI was pre-v25. The v25 console is committed now, so an update installs a
+console that contains the view it was opened from. The `plex.direct` exemption from
+25.0.1 is untouched.
+
 ## v25.0.1 — Polaris
 
 **Plex clients could not reach their server.** Rebinding protection dropped every
