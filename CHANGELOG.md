@@ -1,5 +1,15 @@
 # StellarDNS — Changelog
 
+## v25.0.1 — Polaris
+
+**Plex clients could not reach their server.** Rebinding protection dropped every
+`*.plex.direct` answer that pointed at a private address, which is the only kind Plex
+publishes there — `192-168-4-21.<hash>.plex.direct` is a public name whose whole job is
+to answer with a LAN IP. Clients got NXDOMAIN and reported the server unreachable while
+the server itself answered locally in under a millisecond. `plex.direct` is now exempt
+from the rebinding policy alongside rewrites and local records; `rebindingAllow` still
+applies to everything else, and a public name resolving to 10.x is still blocked.
+
 ## v25.0 — Northstar
 
 **Updates without SSH.** The console gained an Updates view: check GitHub, read the release

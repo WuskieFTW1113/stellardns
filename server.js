@@ -1619,6 +1619,9 @@ function rebindingAllowed(qname) {
   if (config.rebindingProtection === false) return true;
   if (matchCategory(qname)) return true;                                  // our own rewrites resolve private on purpose
   if ((config.localRecords || []).some(r => qname === r.name.toLowerCase() || qname.endsWith('.' + r.name.toLowerCase()))) return true;
+  // Plex advertises its LAN address through <dashed-ip>.<hash>.plex.direct, which is
+  // private by design - clients need that answer or they cannot reach the server.
+  if (qname === 'plex.direct' || qname.endsWith('.plex.direct')) return true;
   if (rebindAllowSet === null) rebindAllowSet = new Set((config.rebindingAllow || config.rebindingAllowlist || []).map(x => String(x).toLowerCase()));
   if (rebindAllowSet.size && firstSuffixMatch(qname, s => rebindAllowSet.has(s))) return true;
   return false;
@@ -2183,8 +2186,8 @@ function saveConfig(opts) {
   if (!opts.noBroadcast && !_savingConfig && global.__sdBroadcastReload) global.__sdBroadcastReload();
 }
 
-const APP_VERSION = '25.0.0';
-const APP_CODENAME = 'Northstar';
+const APP_VERSION = '25.0.1';
+const APP_CODENAME = 'Polaris';
 
 // ---------------------------------------------------------------- self-update
 // v25 can install a release from the console instead of SSH. The trust boundary is kept

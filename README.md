@@ -1,6 +1,6 @@
 # StellarDNS
 
-![version](https://img.shields.io/badge/version-25.0.0-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
+![version](https://img.shields.io/badge/version-25.0.1-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
 
 A fast, gaming-oriented DNS resolver with a web console, built for homelabs.
 
@@ -123,7 +123,7 @@ syntax-checked before the service restarts.
 
 ### Windows client
 
-`StellarDNS-25.0.0-x64.msi` from the [latest release](https://github.com/WuskieFTW1113/stellardns/releases/latest)
+`StellarDNS-25.0.1-x64.msi` from the [latest release](https://github.com/WuskieFTW1113/stellardns/releases/latest)
 installs to `%ProgramFiles%\StellarDNS`, with a Start Menu shortcut and an uninstall that
 removes what it added. It installs no service and changes no DNS setting: the app asks once,
 on first launch, whether to use StellarDNS for this machine, and records your current
