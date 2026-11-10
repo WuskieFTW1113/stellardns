@@ -15,6 +15,41 @@ Three commands, one of which changes nothing. The `--check` run verifies the emb
 before you commit to touching the live resolver, which matters on a device the whole house
 depends on.
 
+## The Updates view
+
+Console -> Updates is the same upgrade, driven from the browser, and it is deliberately
+narrower than the installer.
+
+`POST /api/update/check` asks the GitHub releases API for the newest stable release, compares
+it with the running version and stores the answer. `POST /api/update/apply` then downloads
+exactly two files from that release's tag:
+
+| File | Source |
+|---|---|
+| `server.js` | `raw.githubusercontent.com/<repo>/<tag>/server.js` |
+| `public/index.html` | `raw.githubusercontent.com/<repo>/<tag>/public/index.html` |
+
+If the tag carries a `SHA256SUMS`, both are checked against it; the new `server.js` must also
+pass `node --check`. The pair being replaced is copied to
+`data/update/backup-<version>/` first, the new files are renamed into place,
+`data/update/last.json` records the transaction, and the service restarts. The console's
+rollback reverses exactly that copy.
+
+Two consequences worth knowing:
+
+- **Only those two files change.** A release that adds a unit file, a config key or a new
+  asset needs the installer, not the view.
+- **The tag is the source of truth for the console.** Whichever `public/index.html` the tag
+  points at is the page you end up with. In 25.0.1 the repository lagged the installer
+  payload, so applying the update replaced a working console with an older one that had no
+  Updates view. See
+  [Troubleshooting](Troubleshooting#the-updates-view-vanished-after-an-upgrade); fixed in
+  25.0.2 by committing the console the installer had been carrying.
+
+The installer prints the console API token at the end of every run, updates included. On a
+shared terminal or a captured session, treat that token as exposed and rotate it in the
+console.
+
 ## What is preserved
 
 | Path | Kept | Notes |
