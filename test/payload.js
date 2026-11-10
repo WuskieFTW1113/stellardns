@@ -65,9 +65,12 @@ ok(files.size + ' files in payload');
 
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const names = [...files.keys()];
-const pick = suffix => names.find(n => n === 'stellardns/' + suffix)
-  || names.find(n => n.split('/').length === 2 && n.endsWith('/' + suffix))
-  || names.find(n => n.endsWith('/' + suffix));
+const pick = suffix => {
+  const key = names.find(n => n === 'stellardns/' + suffix)
+    || names.find(n => n.split('/').length === 2 && n.endsWith('/' + suffix))
+    || names.find(n => n.endsWith('/' + suffix));
+  return key ? files.get(key) : undefined;
+};
 
 // Header vs payload integrity.
 if (!header.EXPECTED_SHA) bad('installer header has no EXPECTED_SHA');
