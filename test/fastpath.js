@@ -92,7 +92,19 @@ async function main() {
   child.stdout.on('data', d => { log += d; });
   child.stderr.on('data', d => { log += d; });
 
-  const cleanup = () => { try { child.kill(); } catch {} try { slow.close(); } catch {} try { fast.close(); } catch {} };
+  const stopChild = () => new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
+    let timer;
+    const done = () => { if (timer) clearTimeout(timer); resolve(); };
+    child.once('exit', done);
+    try { child.kill('SIGTERM'); } catch { done(); return; }
+    // Do not remove the data directory while the child can still write to it.
+    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2000);
+  });
+  const cleanup = async () => {
+    try { slow.close(); } catch {} try { fast.close(); } catch {}
+    await stopChild();
+  };
   const fail = (m) => { console.error('  FAIL  ' + m); console.error(log.split('\n').slice(-8).join('\n')); cleanup(); process.exit(1); };
 
   let up = false;
@@ -147,9 +159,9 @@ async function main() {
   const flooredTtl = (floored.answers || [])[0]?.ttl;
   check('enabled floor raises short TTL', typeof flooredTtl === 'number' && flooredTtl >= 30, `${flooredTtl}s`);
 
-  cleanup();
+  await cleanup();
   console.log(`\n  ${6 - fails} passed, ${fails} failed`);
-  fs.rmSync(DATA, { recursive: true, force: true });
+  fs.rmSync(DATA, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   process.exit(fails ? 1 : 0);
 }
 
