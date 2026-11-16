@@ -54,16 +54,32 @@ fake.on('message', (msg, rinfo) => {
 fake.bind(FAKE_PORT, '127.0.0.1');
 
 // ---------------------------------------------------------------- client helpers
+let nextQueryId = 0;
+const clientQueries = new WeakMap(); // socket -> Map(id, pending query)
 function query(sock, name, type = 'A') {
-  return new Promise((resolve, reject) => {
-    const msg = dnsPacket.encode({ type: 'query', id: Math.floor(Math.random() * 65535), flags: dnsPacket.RECURSION_DESIRED, questions: [{ type, name }] });
-    const timer = setTimeout(() => reject(new Error('client timeout for ' + name)), 4000);
-    const onMsg = reply => {
+  let pending = clientQueries.get(sock);
+  if (!pending) {
+    pending = new Map();
+    clientQueries.set(sock, pending);
+    // One listener per socket, not one per query: decoding every reply once per pending query
+    // makes a 400-query burst quadratic and starves the sends before they all reach the server.
+    sock.on('message', reply => {
       let d; try { d = dnsPacket.decode(reply); } catch { return; }
-      if (!d.questions || d.questions[0].name.toLowerCase() !== name.toLowerCase()) return;
-      clearTimeout(timer); sock.off('message', onMsg); resolve(d);
-    };
-    sock.on('message', onMsg);
+      const p = pending.get(d.id);
+      if (!p || !d.questions || d.questions[0].name.toLowerCase() !== p.name.toLowerCase()) return;
+      pending.delete(d.id);
+      clearTimeout(p.timer);
+      p.resolve(d);
+    });
+  }
+  return new Promise((resolve, reject) => {
+    // Match on the DNS ID: duplicate names in the burst below must each wait for their own
+    // reply, or the test reads stats before every query has been handled.
+    let id = nextQueryId++ & 0xffff;
+    while (pending.has(id)) id = nextQueryId++ & 0xffff;
+    const msg = dnsPacket.encode({ type: 'query', id, flags: dnsPacket.RECURSION_DESIRED, questions: [{ type, name }] });
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`client timeout for ${name} (id=${id})`)); }, 4000);
+    pending.set(id, { name, timer, resolve });
     sock.send(msg, DNS_PORT, '127.0.0.1');
   });
 }
@@ -118,9 +134,19 @@ function check(label, cond, extra) {
     if (!ready) throw new Error('never became ready');
 
     console.log('\n  hot path');
-    const t0 = Date.now();
     const N = 400;
-    const results = await Promise.all(Array.from({ length: N }, (_, i) => query(sock, `host${i % 40}.example.test`)));
+    const names = Array.from({ length: 40 }, (_, i) => `host${i}.example.test`);
+    // Prime all 40 names before the burst. Otherwise the first copies are still in flight on a
+    // fast machine, so coalescing (correctly) handles them and the hit count depends on timing.
+    await Promise.all(names.map(name => query(sock, name)));
+    const t0 = Date.now();
+    const results = [];
+    // Two waves, not one 400-packet burst: the default Linux UDP receive queue is ~264 packets
+    // here, and a larger burst drops datagrams before the resolver can read them.
+    for (let start = 0; start < N; start += 200) {
+      const wave = Array.from({ length: Math.min(200, N - start) }, (_, i) => query(sock, names[(start + i) % names.length]));
+      results.push(...await Promise.all(wave));
+    }
     const ms = Date.now() - t0;
     check(`${N} queries all answered`, results.every(r => (r.answers || []).length === 1));
     console.log(`        ${N} queries in ${ms}ms = ${Math.round(N / (ms / 1000))} q/s (single worker, loopback)`);
@@ -129,7 +155,7 @@ function check(label, cond, extra) {
     check('stats expose qps', typeof s1.qps === 'number', 'qps=' + s1.qps);
     check('stats expose hitRate', typeof s1.hitRate === 'number', 'hitRate=' + s1.hitRate);
     check('cache accumulated entries', s1.cacheSize > 0, 'entries=' + s1.cacheSize);
-    // 40 unique names across 400 concurrent queries: the first few must miss, the rest hit.
+    // 40 unique names across 400 queries: the first few must miss, the rest hit.
     check('cache absorbed the repeats', s1.stats.cacheHits >= 250 && s1.stats.cacheMiss < 120,
       `hits=${s1.stats.cacheHits} misses=${s1.stats.cacheMiss}`);
     check('no query was served without an answer', s1.stats.servfail === 0, 'servfail=' + s1.stats.servfail);
