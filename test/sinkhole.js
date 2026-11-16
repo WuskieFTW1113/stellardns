@@ -85,7 +85,21 @@ async function main() {
   let log = '';
   child.stdout.on('data', d => { log += d; });
   child.stderr.on('data', d => { log += d; });
-  const die = (m) => { console.error('  FAIL  ' + m); console.error(log.split('\n').slice(-10).join('\n')); try { child.kill(); } catch {} process.exit(1); };
+  const stopChild = () => new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
+    let timer;
+    const done = () => { if (timer) clearTimeout(timer); resolve(); };
+    child.once('exit', done);
+    try { child.kill('SIGTERM'); } catch { done(); return; }
+    // Do not remove the data directory while the child can still write to it.
+    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 2000);
+  });
+  const cleanup = async () => {
+    try { fake.close(); } catch {}
+    try { listSrv.close(); } catch {}
+    await stopChild();
+  };
+  const die = (m) => { console.error('  FAIL  ' + m); console.error(log.split('\n').slice(-10).join('\n')); cleanup(); process.exit(1); };
 
   let up = false;
   for (let i = 0; i < 40 && !up; i++) { try { await get('/api/whoami'); up = true; } catch { await new Promise(r => setTimeout(r, 250)); } }
@@ -145,10 +159,8 @@ async function main() {
   const txt = (img.body.toString('latin1') + js.body.toString() + sc.body.toString()).toLowerCase();
   check('no response leaks that it is a block', !txt.includes('blocked') && !txt.includes('stellardns'), `${txt.length} chars scanned`);
 
-  try { child.kill(); } catch {}
-  try { fake.close(); } catch {}
-  try { listSrv.close(); } catch {}
-  fs.rmSync(DATA, { recursive: true, force: true });
+  await cleanup();
+  fs.rmSync(DATA, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   console.log(`\n  ${11 - fails} passed, ${fails} failed`);
   process.exit(fails ? 1 : 0);
 }
