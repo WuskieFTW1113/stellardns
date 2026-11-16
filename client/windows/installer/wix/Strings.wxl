@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overrides the stock WiX wizard copy with the product's own words. Every line here is meant
+     to be true after install: no DNS change, no service, no silent policy.
+     WiX v5 requires the text in Value=, not element content. -->
+<WixLocalization Culture="en-us" xmlns="http://wixtoolset.org/schemas/v4/wxl">
+
+  <String Id="WelcomeEulaDlgTitle" Value="Install StellarDNS Client" />
+  <String Id="WelcomeEulaDlgDescription" Value="Encrypted DNS with the same policy as your resolver. Setup copies the client to [INSTALLFOLDER] and adds a Start Menu shortcut." />
+
+  <String Id="ProgressDlgTitle" Value="Installing StellarDNS Client" />
+
+  <String Id="VerifyReadyDlgInstallTitle" Value="Ready to install StellarDNS Client" />
+  <String Id="VerifyReadyDlgInstallText" Value="Click Install to copy StellarDNS Client to [INSTALLFOLDER]. This installer does not change your DNS settings and does not install a service - the client asks before either." />
+
+  <String Id="ExitDialogTitle" Value="StellarDNS Client is installed" />
+  <String Id="ExitDialogDescription" Value="Start StellarDNS Client from the Start Menu. On first run it asks whether to point this machine's DNS at StellarDNS, and saves your current setting so it can be put back." />
+
+  <String Id="MaintenanceWelcomeDlgTitle" Value="StellarDNS Client is already installed" />
+  <String Id="MaintenanceWelcomeDlgDescription" Value="Change, repair, or remove StellarDNS Client." />
+
+  <String Id="MaintenanceTypeDlgTitle" Value="Change, repair, or remove" />
+  <String Id="MaintenanceTypeDlgDescription" Value="Choose what to do with StellarDNS Client." />
+
+</WixLocalization>

@@ -457,8 +457,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
           </div>
           <div>
             <label class="fld">Apple Content Caching discovery</label>
-            <div class="row" style="margin-top:4px"><input id="ap_zone" placeholder="zone (e.g. lan)" style="max-width:120px"><input id="ap_pub" placeholder="public range" style="max-width:150px"><input id="ap_loc" placeholder="local range" style="max-width:150px"></div>
-            <div class="row"><button class="ghost" onclick="genApple()">Generate TXT</button></div>
+            <div class="row" style="margin-top:4px"><input id="ap_zone" placeholder="zone (e.g. lan)" style="max-width:120px"><input id="ap_pub" placeholder="public range (prs)" style="max-width:150px"><input id="ap_loc" placeholder="local range (fss)" style="max-width:150px"></div>
+            <div class="tag" style="color:var(--dim);margin-top:4px">IPv4: single address, start-end, or CIDR; comma-separated.</div>
+            <div class="row"><button class="ghost" onclick="genApple()">Generate TXT</button><button class="ghost" onclick="genApple(true)">Publish now</button></div>
           </div>
         </div>
         <div id="genout" class="tag" style="margin-top:10px"></div>
@@ -968,10 +969,12 @@ async function genApt(){
   const r=await api('/api/gen/apt-cacher',{method:'POST',body:JSON.stringify({zone,proxyHost,proxyIP,port})});
   appendGenerated(r);
 }
-async function genApple(){
+async function genApple(publish){
   const zone=$('#ap_zone').value.trim()||'lan',publicRanges=$('#ap_pub').value.trim(),localRanges=$('#ap_loc').value.trim();
-  const r=await api('/api/gen/apple-cache',{method:'POST',body:JSON.stringify({zone,publicRanges,localRanges})});
-  appendGenerated(r);
+  const r=await api('/api/gen/apple-cache',{method:'POST',body:JSON.stringify({zone,publicRanges,localRanges,apply:publish===true})});
+  if(r.error){ $('#genout').textContent=r.error; return; }
+  if(r.applied){ $('#genout').textContent=r.hint; flash('Apple cache discovery published'); loadZones(); }
+  else appendGenerated(r);
 }
 function appendGenerated(r){
   try{

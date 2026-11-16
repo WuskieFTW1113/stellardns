@@ -1,0 +1,29 @@
+#!/bin/sh
+# AppRun — AppImage entry point.
+# The AppImage ships the Node core; the GUI is the same page the other shells load, so
+# `--gui` opens it in the system browser and `--cli` is the terminal client.
+set -e
+
+HERE="$(dirname "$(readlink -f "$0")")"
+export PATH="$HERE/usr/bin:$PATH"
+export STELLARDNS_CLIENT_HOME="${STELLARDNS_CLIENT_HOME:-$HOME/.config/stellardns-client}"
+
+if [ -x "$HERE/usr/bin/node" ]; then
+  NODE="$HERE/usr/bin/node"
+else
+  NODE="$(command -v node || true)"
+fi
+if [ -z "$NODE" ]; then
+  echo "StellarDNS needs Node.js 18+ on PATH (or bundle one with build.sh --node=/path/to/node)" >&2
+  exit 1
+fi
+
+CLI="$HERE/usr/share/stellardns-client/src/cli.js"
+
+case "${1:-gui}" in
+  gui)   exec "$NODE" "$CLI" run ;;
+  cli)   shift; exec "$NODE" "$CLI" "$@" ;;
+  status|test|block|unblock|refresh|set-dns|restore-dns|install-service|version)
+         exec "$NODE" "$CLI" "$@" ;;
+  *)     exec "$NODE" "$CLI" "$@" ;;
+esac

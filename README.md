@@ -1,6 +1,6 @@
 # StellarDNS
 
-![version](https://img.shields.io/badge/version-25.0.2-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
+![version](https://img.shields.io/badge/version-26.0.0-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
 
 A fast, gaming-oriented DNS resolver with a web console, built for homelabs.
 
@@ -18,6 +18,27 @@ Install             one script  Debian / Ubuntu / Alpine
 ```
 
 ---
+
+## What's new in v26 — Sirius
+
+- **A client that recovers from a dead transport.** A DoT query that times out now drops the
+  partial frame and the in-flight slot before reconnecting; a queued query can no longer tear
+  down a healthy exchange, and a stalled handshake no longer leaves the pool stuck connecting.
+- **Cached answers age.** The client rewrites every cached TTL by the time it has spent in the
+  cache, so a stub resolver behind it cannot keep a 120-second answer for 120 seconds after
+  the client itself has held it for 119. Truncated responses are not cached at all.
+- **The loopback console treats a discovered server as untrusted.** Server addresses and
+  versions, bundle names, targets and list URLs are rendered as text instead of being spliced
+  into `innerHTML` or an inline handler, closing an XSS path from a malicious LAN server.
+- **Windows exits safely.** Closing the window when the tray is unavailable now goes through
+  the normal exit path, and a failed DNS restore aborts the exit instead of stopping the core
+  and leaving the adapter pointed at a dead listener.
+- **IPv6 is verified, not assumed.** Windows takeover and restore check `::1` as well as
+  `127.0.0.1`, and an explicitly configured IPv6 listen address no longer tries to bind IPv4
+  first and fail silently.
+
+The server API and rules format are unchanged from v25. See the
+[release notes](RELEASE-NOTES-v26.md) for what was tested.
 
 ## What's new in v25 — Northstar
 
@@ -143,7 +164,7 @@ syntax-checked before the service restarts.
 
 ### Windows client
 
-`StellarDNS-25.0.2-x64.msi` from the [latest release](https://github.com/WuskieFTW1113/stellardns/releases/latest)
+`StellarDNS-26.0.0-x64.msi` from the [latest release](https://github.com/WuskieFTW1113/stellardns/releases/latest)
 installs to `%ProgramFiles%\StellarDNS`, with a Start Menu shortcut and an uninstall that
 removes what it added. It installs no service and changes no DNS setting: the app asks once,
 on first launch, whether to use StellarDNS for this machine, and records your current

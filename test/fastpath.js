@@ -110,8 +110,17 @@ async function main() {
   const after = (await get('/api/stats')).stats.cacheMiss;
   check('repeat lookup served from cache', after === before, `misses ${before} -> ${after}`);
 
+  // 4) A hit must report the lifetime left, not the upstream's original TTL. Replaying a
+  //    full TTL on a nearly-expired entry is what pins a stale address in a client.
+  const fresh = await get('/api/resolve?name=hedge.test&type=A');
+  await new Promise(r => setTimeout(r, 1200));
+  const aged = await get('/api/resolve?name=hedge.test&type=A');
+  const t1 = (fresh.answers || [])[0]?.ttl;
+  const t2 = (aged.answers || [])[0]?.ttl;
+  check('cached TTL counts down', typeof t1 === 'number' && typeof t2 === 'number' && t2 < t1, `${t1}s -> ${t2}s`);
+
   cleanup();
-  console.log(`\n  ${3 - fails} passed, ${fails} failed`);
+  console.log(`\n  ${4 - fails} passed, ${fails} failed`);
   fs.rmSync(DATA, { recursive: true, force: true });
   process.exit(fails ? 1 : 0);
 }

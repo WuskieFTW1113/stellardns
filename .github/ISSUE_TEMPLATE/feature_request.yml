@@ -1,0 +1,40 @@
+name: Feature request
+description: Something the resolver should do that it does not do today
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation, not the implementation. "Devices on the guest VLAN get the wrong sinkhole address" beats "add a per-subnet sinkhole".
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What did you have in mind?
+      description: Optional. Config shape, console placement, behaviour.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Blocking / sinkhole
+        - Game caching / rewrites
+        - Internal names / Active Directory
+        - Upstreams / performance
+        - Console / API
+        - Installer / packaging
+        - Documentation
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Fit
+      options:
+        - label: This can be done at the DNS layer (no TLS interception, no client agent)
+        - label: I checked the wiki and the changelog first

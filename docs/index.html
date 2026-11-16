@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StellarDNS — a resolver that plays nice with game downloads</title>
+<meta name="description" content="A gaming-oriented DNS resolver: LANCache rewrites without lancache-dns, hedged upstreams, a stealth sinkhole, and encrypted DoH/DoT clients.">
+<meta name="theme-color" content="#080b12">
+<style>
+  :root{
+    --bg:#080b12; --panel:#0d121c; --line:#1b2433; --ink:#e6ecf6; --ink2:#aab6c8;
+    --dim:#6b7a90; --sig:#4ade80; --blue:#60a5fa; --violet:#a78bfa; --amber:#fbbf24;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:radial-gradient(1100px 620px at 78% -12%,rgba(96,165,250,.18),transparent 62%),
+               radial-gradient(760px 460px at 8% 4%,rgba(74,222,128,.10),transparent 60%),var(--bg);
+    color:var(--ink);font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header{border-bottom:1px solid var(--line);backdrop-filter:blur(8px);position:sticky;top:0;background:rgba(8,11,18,.82);z-index:10}
+  header .wrap{display:flex;align-items:center;gap:22px;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.2px;color:var(--ink)}
+  .brand span.mark{color:var(--sig);font-size:20px}
+  .brand span.dns{color:var(--dim);font-weight:600}
+  nav{margin-left:auto;display:flex;gap:20px;font-size:14.5px}
+  nav a{color:var(--ink2)}
+  nav a:hover{color:var(--ink);text-decoration:none}
+  @media(max-width:760px){nav{display:none}}
+  .hero{padding:86px 0 54px}
+  .badge{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--panel);
+    border-radius:999px;padding:5px 13px;font-size:13px;color:var(--ink2);font-family:var(--mono)}
+  .badge b{color:var(--sig);font-weight:600}
+  h1{font-size:clamp(32px,5.2vw,56px);line-height:1.07;margin:20px 0 0;letter-spacing:-1.4px}
+  h1 em{font-style:normal;color:var(--sig)}
+  .lede{font-size:19px;color:var(--ink2);max-width:64ch;margin:18px 0 0}
+  .cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}
+  .btn{display:inline-flex;align-items:center;gap:8px;border-radius:10px;padding:11px 18px;font-weight:600;font-size:15px;
+    border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+  .btn:hover{text-decoration:none;border-color:#2b3a4f}
+  .btn.primary{background:linear-gradient(180deg,#1f9d55,#15803d);border-color:#1f9d55;color:#eafff2}
+  .btn.primary:hover{filter:brightness(1.08)}
+  section{padding:54px 0;border-top:1px solid var(--line)}
+  h2{font-size:26px;margin:0 0 6px;letter-spacing:-.4px}
+  .sub{color:var(--dim);margin:0 0 28px}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(268px,1fr))}
+  .card{background:linear-gradient(180deg,rgba(13,18,28,.96),rgba(13,18,28,.72));border:1px solid var(--line);
+    border-radius:14px;padding:20px}
+  .card h3{margin:0 0 6px;font-size:16.5px;display:flex;align-items:center;gap:9px}
+  .card h3 i{font-style:normal;color:var(--sig)}
+  .card p{margin:0;color:var(--ink2);font-size:14.5px}
+  .card .metric{margin-top:12px;font-family:var(--mono);font-size:13px;color:var(--dim)}
+  pre{background:#070a10;border:1px solid var(--line);border-radius:12px;padding:16px 18px;overflow:auto;
+    font-family:var(--mono);font-size:13.5px;color:#cfe3ff;line-height:1.7}
+  pre .c{color:#5b6b82}
+  pre .p{color:var(--sig)}
+  table{width:100%;border-collapse:collapse;font-size:14.5px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.7px}
+  td code{font-family:var(--mono);font-size:13px;color:#cfe3ff}
+  .platform{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+  .chip{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px;color:var(--ink2);font-family:var(--mono)}
+  footer{border-top:1px solid var(--line);padding:34px 0;color:var(--dim);font-size:14px}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between}
+  .note{border-left:2px solid var(--amber);padding:2px 0 2px 14px;color:var(--ink2);font-size:14.5px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="brand"><span class="mark">✦</span> Stellar<span class="dns">DNS</span></div>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#clients">Clients</a>
+      <a href="#update">Updates</a>
+      <a href="https://github.com/WuskieFTW1113/stellardns">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <div class="badge">v26.0.0 <b>Sirius</b> · MIT · self-hosted</div>
+    <h1>A resolver built for <em>game downloads</em>, not just ad blocking.</h1>
+    <p class="lede">
+      StellarDNS answers your cache IP for every launcher domain, races upstreams so a slow
+      forwarder cannot add its latency to every lookup, hides that it is filtering at all, and
+      now updates itself from the console — plus an encrypted client so laptops get the same
+      policy off your LAN.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="#install">Install on Linux</a>
+      <a class="btn" href="https://github.com/WuskieFTW1113/stellardns">Source</a>
+      <a class="btn" href="https://github.com/WuskieFTW1113/stellardns/wiki">Documentation</a>
+    </div>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>What it actually does</h2>
+      <p class="sub">Every claim below is a behaviour you can watch in the query log.</p>
+      <div class="grid">
+        <div class="card">
+          <h3><i>⇄</i> LANCache without lancache-dns</h3>
+          <p>Name a category, give it your cache address, and every domain it owns resolves there — one static answer, no second container to babysit. Toggle a launcher off to return NXDOMAIN instantly.</p>
+          <div class="metric">steam · epicgames · xboxlive · battlenet · riot · uplay</div>
+        </div>
+        <div class="card">
+          <h3><i>⚡</i> Hedged upstreams</h3>
+          <p>Start the fastest forwarder; if it has not answered in 60 ms, start the next one too and take whichever answers first. A slow-but-alive upstream stops taxing every query.</p>
+          <div class="metric">adaptive SRTT · circuit breaker · serve-stale</div>
+        </div>
+        <div class="card">
+          <h3><i>⊘</i> A sinkhole that does not look like one</h3>
+          <p>Blocked answers come from this host's address on the client's own subnet, with a per-name TTL derived by hash, NODATA with a synthetic SOA where NXDOMAIN would be a lie, and no Extended DNS Errors on any block path.</p>
+          <div class="metric">no constant TTL · no EDE 15/17 · stub answers 404</div>
+        </div>
+        <div class="card">
+          <h3><i>⌂</i> Real internal DNS</h3>
+          <p>Local records, conditional forwarders, Active Directory zones including <code>_msdcs</code> and SRV records, Bonjour/mDNS-adjacent name handling, and private PTR sent to your DC.</p>
+          <div class="metric">internal TTL capped at 30 s · never served stale</div>
+        </div>
+        <div class="card">
+          <h3><i>⤒</i> Updates from the console</h3>
+          <p>Check GitHub, review the release notes, install. The new <code>server.js</code> is <code>node --check</code>ed before it replaces a working one, the old files are backed up, and one click rolls back.</p>
+          <div class="metric">https-only · host allowlist · checksum when published</div>
+        </div>
+        <div class="card">
+          <h3><i>⛊</i> Encrypted client</h3>
+          <p>A local resolver for your laptop that speaks DoH or DoT upstream, so the same policy travels with the machine. Windows shell uses WebView2, Linux ships as an AppImage with a CLI, macOS is native Swift.</p>
+          <div class="metric">127.0.0.1:53 · DoH/DoT · blocklists · GUI + CLI</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>Install</h2>
+      <p class="sub">Debian, Ubuntu, Alpine and anything with systemd or OpenRC. Node 18 or newer.</p>
+<pre><span class="c"># one line, on the box that will answer DNS</span>
+curl -fsSL https://github.com/WuskieFTW1113/stellardns/releases/latest/download/stellardns-install.sh | <span class="p">sudo sh</span>
+
+<span class="c"># then open the console</span>
+http://<span class="p">&lt;server-ip&gt;</span>:5380
+
+<span class="c"># it prints the generated admin password once; change it in Access &amp; users</span></pre>
+      <p class="note">Do not put this behind an open port 53 on the internet. It is a LAN resolver: no rate limiting worth the name, and an open recursive resolver is a DDoS amplifier.</p>
+    </div>
+  </section>
+
+  <section id="clients">
+    <div class="wrap">
+      <h2>Clients</h2>
+      <p class="sub">The same blocklists and rewrites on a machine that leaves the house.</p>
+      <div class="grid">
+        <div class="card">
+          <h3><i>⊞</i> Windows — WebView2</h3>
+          <p>A native host around the shared console, so the UI is the same one the server ships. Runs as a service, points the adapter at <code>127.0.0.1</code>, and restores your previous DNS on uninstall.</p>
+          <div class="platform"><span class="chip">Windows 10/11</span><span class="chip">x64 · arm64</span><span class="chip">WebView2</span></div>
+        </div>
+        <div class="card">
+          <h3><i>◈</i> Linux — AppImage</h3>
+          <p>One file, no install step. GUI for the desktop and a <code>stellardns-client</code> binary on <code>PATH</code> for scripts, systemd units and headless boxes.</p>
+          <div class="platform"><span class="chip">AppImage</span><span class="chip">x64 · arm64</span><span class="chip">CLI + GUI</span></div>
+        </div>
+        <div class="card">
+          <h3><i>⌘</i> macOS — Swift</h3>
+          <p>Native SwiftUI shell with a Metal-backed traffic view, universal build for Apple silicon and Intel. Ships the same Node core as the other platforms.</p>
+          <div class="platform"><span class="chip">arm64</span><span class="chip">x86_64</span><span class="chip">Metal</span></div>
+        </div>
+      </div>
+      <p class="sub" style="margin-top:22px">Client packaging lives in <code>client/</code> in the repository. The Node core is the part that runs everywhere; the native shells only host the UI and the service.</p>
+    </div>
+  </section>
+
+  <section id="update">
+    <div class="wrap">
+      <h2>Updating</h2>
+      <p class="sub">Two ways, both keep <code>config.json</code>, users, logs and TLS material.</p>
+      <table>
+        <thead><tr><th>Path</th><th>What happens</th><th>Use when</th></tr></thead>
+        <tbody>
+          <tr><td><code>Console → Updates</code></td><td>Fetches the release, checks syntax, backs up, swaps, restarts, reports back. Rollback restores the previous files.</td><td>Normal upgrades</td></tr>
+          <tr><td><code>sudo sh stellardns-install.sh</code></td><td>Re-runs the installer in place, keeps your config and data, restarts the unit.</td><td>First install, or a broken console</td></tr>
+        </tbody>
+      </table>
+      <p class="sub" style="margin-top:22px">The updater only ever talks to <code>api.github.com</code> and <code>raw.githubusercontent.com</code> over https, with a fixed redirect host list, a 16 MB cap, and <code>node --check</code> before anything is replaced. It installs nothing it has not been shown in a check, and it never auto-installs — auto-check can be turned off in config.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>StellarDNS v26.0.0 “Sirius” — MIT licensed.</div>
+    <div><a href="https://github.com/WuskieFTW1113/stellardns">GitHub</a> · <a href="https://github.com/WuskieFTW1113/stellardns/wiki">Wiki</a> · <a href="https://github.com/WuskieFTW1113/stellardns/security/policy">Security</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

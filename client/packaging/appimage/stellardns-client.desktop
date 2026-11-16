@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=StellarDNS Client
+GenericName=Encrypted DNS Client
+Comment=Local DoH/DoT resolver with ad blocking
+Exec=stellardns-client gui
+Icon=stellardns-client
+Terminal=false
+Categories=Network;Utility;
+Keywords=dns;doh;dot;adblock;privacy;
+StartupWMClass=StellarDNS

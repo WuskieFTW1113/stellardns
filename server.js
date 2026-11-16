@@ -130,7 +130,7 @@ const DEFAULT_CONFIG = {
   localRecords: [
     // { name: '_apt_proxy._tcp.lan', type: 'SRV', data: { priority: 0, weight: 0, port: 3142, target: 'aptcache.lan' }, ttl: 3600 },
     // { name: 'aptcache.lan', type: 'A', data: '10.0.0.5', ttl: 3600 },
-    // { name: '_aaplcache._tcp.lan', type: 'TXT', data: 'prs=203.0.113.10-203.0.113.20', ttl: 10800 },
+    // { name: '_aaplcache._tcp.lan', type: 'TXT', data: 'prs=203.0.113.10-203.0.113.20 fss=10.0.0.0-10.0.0.255', ttl: 300 },
   ]
 };
 
@@ -538,6 +538,30 @@ function isInternalName(name) {
   return false;
 }
 
+// Apple's human-readable prs/fss values are single IPv4 addresses or start-end
+// ranges, comma-separated. CIDR is accepted from the console but written in the
+// documented start-end form so clients do not have to understand it.
+function v4ToInt(ip) {
+  return ip.split('.').reduce((n, octet) => n * 256 + Number(octet), 0);
+}
+function v4ToStr(n) {
+  return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+}
+function toAppleRange(value) {
+  const v = String(value).trim();
+  if (net.isIPv4(v)) return v;
+  const pair = v.split('-').map(x => x.trim());
+  if (pair.length === 2 && net.isIPv4(pair[0]) && net.isIPv4(pair[1])) {
+    return v4ToInt(pair[0]) <= v4ToInt(pair[1]) ? `${pair[0]}-${pair[1]}` : null;
+  }
+  const m = /^([^/]+)\/(\d{1,2})$/.exec(v);
+  if (!m || !net.isIPv4(m[1]) || Number(m[2]) > 32) return null;
+  const mask = Number(m[2]) ? (0xffffffff << (32 - Number(m[2]))) >>> 0 : 0;
+  const start = (v4ToInt(m[1]) & mask) >>> 0;
+  const end = (start | (~mask >>> 0)) >>> 0;
+  return start === end ? v4ToStr(start) : `${v4ToStr(start)}-${v4ToStr(end)}`;
+}
+
 function cacheGet(key) {
   const e = cache.get(key);
   if (!e) return null;
@@ -600,7 +624,7 @@ function snapshotCache() {
       for (const [k, e] of cache) {
         if (e.expiresAt <= now) continue;
         if (n >= SNAP_MAX_ENTRIES) break;
-        const rec = JSON.stringify([k, e.rcode, e.answers, e.expiresAt, e.hits]);
+        const rec = JSON.stringify([k, e.rcode, e.answers, e.expiresAt, e.hits, e.ad ? 1 : 0]);
         fs.writeSync(fd, (n ? ',' : '') + rec);
         n++;
       }
@@ -615,12 +639,23 @@ function snapshotCache() {
 function restoreCache() {
   try {
     if (!fs.existsSync(SNAP)) return;
-    const arr = JSON.parse(fs.readFileSync(SNAP, 'utf8'));
+    // JSON has no Buffers: unknown-type rdata (HTTPS/SVCB, type 65/64) and TXT chunks come
+    // back as {type:'Buffer',data:[...]}, which dns-packet cannot encode. Revive them in the
+    // parse itself; a restored HTTPS answer that cannot be encoded leaves Safari waiting.
+    const arr = JSON.parse(fs.readFileSync(SNAP, 'utf8'), (key, value) =>
+      value && value.type === 'Buffer' && Array.isArray(value.data) ? Buffer.from(value.data) : value);
     const now = Date.now();
     let n = 0;
-    for (const [k, rcode, answers, expiresAt, hits] of arr) {
+    for (const [k, rcode, answers, expiresAt, hits, ad] of arr) {
       if (n >= SNAP_MAX_ENTRIES) break;
-      if (expiresAt > now) { cache.set(k, { rcode, answers, expiresAt, insertedAt: now, hits: hits || 0 }); n++; }
+      if (expiresAt > now) {
+        // `internal` is derived, not stored: it depends on the zones configured now, and a
+        // stale flag would let a restored LAN name be served stale for days.
+        const name = k.slice(0, k.indexOf('|'));
+        cache.set(k, { rcode, answers, expiresAt, insertedAt: now, hits: hits || 0,
+          internal: isInternalName(name), ad: !!ad });
+        n++;
+      }
     }
     console.log(`[snapshot] restored ${n} cache entries`);
   } catch (e) { console.error('[snapshot] restore failed:', e.message); }
@@ -1654,7 +1689,7 @@ function startDot() {
         const msg = buf.subarray(2, 2 + len);
         buf = buf.subarray(2 + len);
         stats.dotQueries = (stats.dotQueries || 0) + 1;
-        const out = await handleQuery(msg, { client: (sock.remoteAddress || '?').replace('::ffff:', ''), proto: 'dot' });
+        const out = await answerSafely(msg, { client: (sock.remoteAddress || '?').replace('::ffff:', ''), proto: 'dot' });
         if (out) {
           const framed = Buffer.alloc(2 + out.length);
           framed.writeUInt16BE(out.length, 0); out.copy(framed, 2);
@@ -1687,7 +1722,7 @@ function startDoh() {
           questions: [{ type: /^\d+$/.test(ty) ? Number(ty) : ty, name: nm }],
           additionals: [{ type: 'OPT', name: '.', udpPayloadSize: config.dns.ednsUdpSize }] });
       } catch (e) { res.writeHead(400); return res.end(); }
-      const wireOut = await handleQuery(qwire, { client: (req.socket.remoteAddress || '?').replace('::ffff:', ''), proto: 'doh-json', noLog: true });
+      const wireOut = await answerSafely(qwire, { client: (req.socket.remoteAddress || '?').replace('::ffff:', ''), proto: 'doh-json', noLog: true });
       let d = null;
       try { if (wireOut) d = dnsPacket.decode(wireOut); } catch {}
       const body = {
@@ -1708,7 +1743,7 @@ function startDoh() {
     }
     if (!msg || !msg.length) { res.writeHead(400); return res.end(); }
     stats.dohQueries = (stats.dohQueries || 0) + 1;
-    const out = await handleQuery(msg, { client: (req.socket.remoteAddress || '?').replace('::ffff:', ''), proto: 'doh' });
+    const out = await answerSafely(msg, { client: (req.socket.remoteAddress || '?').replace('::ffff:', ''), proto: 'doh' });
     if (!out) { res.writeHead(500); return res.end(); }
     res.writeHead(200, { 'Content-Type': 'application/dns-message', 'Cache-Control': 'max-age=0' });
     res.end(out);
@@ -1817,8 +1852,16 @@ function rebindingExempt(qname) {
 }
 
 // ---------------------------------------------------------------- request handling
-function buildAnswers(question, entry) {
-  return entry.answers.map(a => ({ ...a }));
+function buildAnswers(entry, stale) {
+  // The TTL a client may cache for is what this entry has LEFT, not what the upstream said
+  // when it was stored. Replaying the original value tells a device "good for another hour"
+  // seconds before this resolver replaces the record, and the device then holds an address
+  // we have already dropped. iOS/macOS cache hard, so they show it first.
+  const left = Math.max(0, Math.floor((entry.expiresAt - Date.now()) / 1000));
+  // RFC 8767: a stale answer must not look fresh, or it re-pins the dead address in the
+  // client for a full TTL after the upstream has recovered. 30s lets it retry and move on.
+  const cap = stale ? 30 : left;
+  return entry.answers.map(a => ({ ...a, ttl: Math.min(typeof a.ttl === 'number' ? a.ttl : 30, cap) }));
 }
 
 async function handleQuery(msg, meta) {
@@ -1833,7 +1876,6 @@ async function handleQuery(msg, meta) {
   stats.queries++;
   const t0 = Date.now();
   const respond = (rcode, answers, disp, edeOpt, adFlag, authorities) => {
-    if (!meta.noLog) logQuery({ t: Date.now(), client: meta.client, proto: meta.proto, name: q.name, type: q.type, rcode, disp, ms: Date.now() - t0 });
     // A stealth block must not describe itself. EDE 15/17 is a machine-readable "I filtered
     // this", so in sinkhole/zeroip mode no block path may attach one — including the paths
     // that still have to answer NXDOMAIN, like a disabled launcher or a blockAll policy.
@@ -1868,6 +1910,9 @@ async function handleQuery(msg, meta) {
       additionals: [{ type: 'OPT', name: '.', udpPayloadSize: config.dns.ednsUdpSize }]
     });
     if (edeOpt) wire = appendEdnsOptions(wire, [edeOpt]);   // raw-append EDE (dns-packet can't encode it)
+    // Log only a response that actually encoded. A throw below is a handler failure, and
+    // answerSafely records that as SERVFAIL with the name and type instead of a false NOERROR.
+    if (!meta.noLog) logQuery({ t: Date.now(), client: meta.client, proto: meta.proto, name: q.name, type: q.type, rcode, disp, ms: Date.now() - t0 });
     return wire;
   };
 
@@ -1913,7 +1958,7 @@ async function handleQuery(msg, meta) {
     }
     const rKey = cacheKey(q);
     const rHit = cacheGet(rKey);
-    if (rHit && !rHit.stale) { stats.cacheHits++; return respond(rHit.entry.rcode, buildAnswers(q, rHit.entry), 'cache-ptr'); }
+    if (rHit && !rHit.stale) { stats.cacheHits++; return respond(rHit.entry.rcode, buildAnswers(rHit.entry), 'cache-ptr'); }
     if (!rUps.length) return respond('NXDOMAIN', [], 'ptr-private-no-resolver', edeOption(EDE.NOT_SUPPORTED, 'no internal resolver for private PTR'));
     try {
       const resp = await resolveUpstream(q, rUps, meta.client);
@@ -1932,7 +1977,7 @@ async function handleQuery(msg, meta) {
     stats.local++;
     const cfKey = cacheKey(q);
     const cHit = cacheGet(cfKey);
-    if (cHit && !cHit.stale) { stats.cacheHits++; return respond(cHit.entry.rcode, buildAnswers(q, cHit.entry), 'cache-internal'); }
+    if (cHit && !cHit.stale) { stats.cacheHits++; return respond(cHit.entry.rcode, buildAnswers(cHit.entry), 'cache-internal'); }
     try {
       const cfUps = withoutClient(cf.upstreams, meta.client);
       if (!cfUps.length) return respond('NXDOMAIN', [], `forward-loopguard:${cf.zone}`, edeOption(EDE.NOT_SUPPORTED, 'forward loop avoided'));
@@ -1941,7 +1986,7 @@ async function handleQuery(msg, meta) {
       cacheSet(cfKey, resp.rcode, answers, minTtl(answers));
       return respond(resp.rcode, answers, `forward:${cf.zone}`);
     } catch (e) {
-      if (cHit && cHit.stale) { stats.cacheStale++; return respond(cHit.entry.rcode, buildAnswers(q, cHit.entry), 'stale-internal'); }
+      if (cHit && cHit.stale) { stats.cacheStale++; return respond(cHit.entry.rcode, buildAnswers(cHit.entry, true), 'stale-internal'); }
       stats.servfail++;
       return respond('SERVFAIL', [], `internal-fail:${e.message}`);
     }
@@ -1967,14 +2012,14 @@ async function handleQuery(msg, meta) {
     if (ifUps.length) {
       const ikey = cacheKey(q);
       const iHit = cacheGet(ikey);
-      if (iHit && !iHit.stale) { stats.cacheHits++; return respond(iHit.entry.rcode, buildAnswers(q, iHit.entry), 'cache-internal'); }
+      if (iHit && !iHit.stale) { stats.cacheHits++; return respond(iHit.entry.rcode, buildAnswers(iHit.entry), 'cache-internal'); }
       try {
         const resp = await resolveUpstream(q, ifUps, meta.client);
         const answers = normalizeAnswers((resp.answers || []).filter(a => a.type !== 'OPT'));
         cacheSet(ikey, resp.rcode, answers, minTtl(answers));
         return respond(resp.rcode, answers, `internal-router:${internalZone}`);
       } catch (e) {
-        if (iHit && iHit.stale) { stats.cacheStale++; return respond(iHit.entry.rcode, buildAnswers(q, iHit.entry), 'stale-internal'); }
+        if (iHit && iHit.stale) { stats.cacheStale++; return respond(iHit.entry.rcode, buildAnswers(iHit.entry, true), 'stale-internal'); }
         stats.servfail++;
         return respond('SERVFAIL', [], `internal-router-fail:${e.message}`, edeOption(EDE.OTHER, 'internal resolver unreachable'));
       }
@@ -2032,7 +2077,7 @@ async function handleQuery(msg, meta) {
   const hit = cacheGet(key);
   if (hit && !hit.stale) {
     stats.cacheHits++;
-    return respond(hit.entry.rcode, buildAnswers(q, hit.entry), 'cache', null, hit.entry.ad);
+    return respond(hit.entry.rcode, buildAnswers(hit.entry), 'cache', null, hit.entry.ad);
   }
 
   // 5) Upstream (coalesced) — with serve-stale on failure
@@ -2087,7 +2132,7 @@ async function handleQuery(msg, meta) {
     stats.upstreamFail++;
     if (hit && hit.stale) {                       // serve-stale saves the day
       stats.cacheStale++;
-      return respond(hit.entry.rcode, buildAnswers(q, hit.entry), 'stale', edeOption(EDE.STALE, 'serve-stale: upstream unreachable'));
+      return respond(hit.entry.rcode, buildAnswers(hit.entry, true), 'stale', edeOption(EDE.STALE, 'serve-stale: upstream unreachable'));
     }
     stats.servfail++;                             // honest SERVFAIL — and crucially, NOT cached
     return respond('SERVFAIL', [], `fail:${e.message}`);
@@ -2096,10 +2141,41 @@ async function handleQuery(msg, meta) {
 
 let ipv6State = { configured: false, listening: false, reason: 'not started' };
 
+// Never answer with silence. A throw inside handleQuery — an unencodable cached record, a
+// malformed upstream answer — used to leave the client waiting out its own timeout with
+// nothing in the log. SERVFAIL is immediate, lets the client retry or fall back, and shows
+// up in the query log as a failure instead of a mystery.
+function servfailWire(msg) {
+  try {
+    const q = dnsPacket.decode(msg);
+    const buf = dnsPacket.encode({ type: 'response', id: q.id,
+      flags: dnsPacket.RECURSION_DESIRED | dnsPacket.RECURSION_AVAILABLE,
+      questions: q.questions || [], answers: [] });
+    buf[3] = (buf[3] & 0xf0) | 2;          // rcode SERVFAIL
+    return buf;
+  } catch { return null; }
+}
+async function answerSafely(msg, meta) {
+  const t0 = Date.now();
+  try { return await handleQuery(msg, meta); }
+  catch (e) {
+    let name = '?', type = '?';
+    try {
+      const q = dnsPacket.decode(msg);
+      if (q.questions && q.questions[0]) { name = q.questions[0].name.toLowerCase(); type = q.questions[0].type; }
+    } catch {}
+    stats.servfail++;
+    stats.lastError = `${name} ${type}: ${e.message}`;
+    if (!meta.noLog) logQuery({ t: Date.now(), client: meta.client, proto: meta.proto, name, type, rcode: 'SERVFAIL', disp: 'handler-error: ' + e.message, ms: Date.now() - t0 });
+    console.error(`[${meta.proto}] SERVFAIL ${name} ${type}: ${e.message}`);
+    return servfailWire(msg);
+  }
+}
+
 // ---------------------------------------------------------------- transports
 const udp = dgram.createSocket('udp4');
 udp.on('message', async (msg, rinfo) => {
-  const out = await handleQuery(msg, { client: rinfo.address, proto: 'udp' });
+  const out = await answerSafely(msg, { client: rinfo.address, proto: 'udp' });
   if (!out) return;
   // ednsUdpSize is what we advertise, not what the client agreed to receive. Respect the
   // client's own EDNS buffer before truncating, or a client advertising 4096 gets a needless
@@ -2137,7 +2213,7 @@ if (config.dns.tcp) {
         const msg = buf.subarray(2, 2 + len);
         buf = buf.subarray(2 + len);
         stats.tcpQueries++;
-        const out = await handleQuery(msg, { client: sock.remoteAddress?.replace('::ffff:', '') || '?', proto: 'tcp' });
+        const out = await answerSafely(msg, { client: sock.remoteAddress?.replace('::ffff:', '') || '?', proto: 'tcp' });
         if (out) {
           const framed = Buffer.alloc(2 + out.length);
           framed.writeUInt16BE(out.length, 0); out.copy(framed, 2);
@@ -2186,8 +2262,8 @@ function saveConfig(opts) {
   if (!opts.noBroadcast && !_savingConfig && global.__sdBroadcastReload) global.__sdBroadcastReload();
 }
 
-const APP_VERSION = '25.0.2';
-const APP_CODENAME = 'Vega';
+const APP_VERSION = '26.0.0';
+const APP_CODENAME = 'Sirius';
 
 // ---------------------------------------------------------------- self-update
 // v25 can install a release from the console instead of SSH. The trust boundary is kept
@@ -2605,7 +2681,18 @@ const webServer = http.createServer(async (req, res) => {
     if (u.pathname === '/api/category/full' && req.method === 'GET') {
       return json(res, 200, config.categories);
     }
-    if (u.pathname === '/api/flush' && req.method === 'POST') { const n = cache.size; cache.clear(); return json(res, 200, { flushed: n }); }
+    if (u.pathname === '/api/flush' && req.method === 'POST') {
+      // Every worker owns a cache (workers:0 is one per core), so clearing only this one and
+      // answering "flushed N" leaves the others serving their copies — and the snapshot on
+      // disk brings the whole thing back on restart. Fan out, and drop the snapshot.
+      const n = cache.size;
+      cache.clear();
+      // Cluster: the primary owns the snapshot and fans the flush out. Single process: this
+      // one clears its own snapshot.
+      if (process.send) { try { process.send({ t: 'flushReq' }); } catch {} }
+      else { try { fs.unlinkSync(SNAP); } catch {} }
+      return json(res, 200, { flushed: n });
+    }
     if (u.pathname === '/api/blocklists' && req.method === 'GET') return json(res, 200, { lists: config.blocklists, meta: blockMeta });
     if (u.pathname === '/api/blocklists' && req.method === 'POST') {
       const { lists } = await readBody(req);
@@ -2789,7 +2876,7 @@ const webServer = http.createServer(async (req, res) => {
           questions: [{ type, name }], additionals: [{ type: 'OPT', name: '.', udpPayloadSize: config.dns.ednsUdpSize }] });
       } catch (e) { return json(res, 400, { error: 'unsupported record type' }); }
       const t0 = Date.now();
-      const wire = await handleQuery(queryWire, { client: '127.0.0.1', proto: 'api', noLog: true });
+      const wire = await answerSafely(queryWire, { client: '127.0.0.1', proto: 'api', noLog: true });
       if (!wire) return json(res, 502, { error: 'no response' });
       let d;
       try { d = dnsPacket.decode(wire); } catch (e) { return json(res, 502, { error: 'undecodable response' }); }
@@ -2853,14 +2940,48 @@ const webServer = http.createServer(async (req, res) => {
       return json(res, 200, { records: recs, hint });
     }
     if (u.pathname === '/api/gen/apple-cache' && req.method === 'POST') {
-      const { zone, publicRanges, localRanges } = await readBody(req);
-      const z = (zone || 'lan').replace(/^\.|\.$/g, '');
-      const parts = [];
-      if (publicRanges) parts.push(`prs=${publicRanges}`);
-      if (localRanges) parts.push(`fss=${localRanges}`);
-      const txt = parts.join(' ') || 'prs=';
-      const recs = [ { name: `_aaplcache._tcp.${z}`, type: 'TXT', data: txt, ttl: 10800 } ];
-      return json(res, 200, { records: recs, hint: `Publishes Apple Content Caching discovery for zone ${z}. prs = your public IP range(s); fss = your caching servers' local IP range so devices prefer them.` });
+      const body = await readBody(req);
+      const z = (String(body.zone || '').trim() || 'lan').replace(/^\.|\.$/g, '');
+      // prs/fss are the human-readable public/local IPv4 ranges. Validate while
+      // building the TXT so a typo cannot be staged or published and then sit in
+      // DNS for the record's whole TTL.
+      const parts = [], bad = [];
+      for (const [key, prop] of [['prs', 'publicRanges'], ['fss', 'localRanges']]) {
+        const good = [];
+        for (const value of String(body[prop] || '').split(',').map(x => x.trim()).filter(Boolean)) {
+          const range = toAppleRange(value);
+          if (range) good.push(range); else bad.push(`${key}="${value}"`);
+        }
+        if (good.length) parts.push(`${key}=${good.join(',')}`);
+      }
+      if (bad.length) {
+        return json(res, 400, { error: `Malformed Apple cache range${bad.length > 1 ? 's' : ''}: ${bad.join(', ')}. Use an IPv4 address, start-end range, or CIDR.` });
+      }
+      if (!parts.length) return json(res, 400, { error: 'Enter at least one public or local range (prs or fss).' });
+      const txt = parts.join(' ');
+      // fss is what makes a device prefer this cache. Without it the record only says
+      // which public ranges are ours, and a neighbouring or upstream cache can still win.
+      const warning = parts.some(p => p.startsWith('fss=')) ? '' : 'fss is empty — devices get no local range to prefer, so they may use another content cache. ';
+      // 300s, not Apple's 10800s example: a changed range has to reach devices in minutes,
+      // because they only re-read the hint when this TTL expires. Local records are answered
+      // ahead of the cache, so a re-read gets the new value on the first query.
+      const recs = [ { name: `_aaplcache._tcp.${z}`, type: 'TXT', data: txt, ttl: 300 } ];
+      let applied = false;
+      if (body.apply === true) {
+        // Publish immediately instead of staging it in the Local records textarea: the record
+        // is authoritative as soon as this returns, no Save click in between.
+        config.localRecords = (config.localRecords || []).filter(r =>
+          !(normZone(r.name) === normZone(recs[0].name) && String(r.type).toUpperCase() === 'TXT'));
+        config.localRecords.push(recs[0]);
+        saveConfig(); invalidateLocalIndex();
+        applied = true;
+      }
+      // Inside an internal zone the responder clamps TTLs to internalTtlCap, so say what the
+      // device will actually receive rather than what was stored.
+      const effTtl = isInternalName(recs[0].name)
+        ? Math.min(recs[0].ttl, Math.max(5, Number(config.internalTtlCap) || 30))
+        : recs[0].ttl;
+      return json(res, 200, { records: recs, applied, hint: `${warning}Apple Content Caching discovery for ${z}. prs = public IPv4 range(s); fss = local IPv4 range(s) of favored caches. TTL ${effTtl}s${effTtl !== recs[0].ttl ? ' (internal-zone clamp)' : ''}.${applied ? ' Published: devices get it on their next query.' : ''}` });
     }
     if (u.pathname === '/api/metrics') {
       const lines = [];
@@ -2917,6 +3038,11 @@ if (cluster.isPrimary && WORKER_COUNT > 1) {
   cluster.on('message', (fromWorker, msg) => {
     if (msg.t === 'reload') {                      // a worker changed config -> everyone rereads
       for (const w of Object.values(cluster.workers)) w.send({ t: 'reload' });
+    } else if (msg.t === 'flushReq') {             // one worker flushed -> flush every worker
+      // The primary owns the snapshot writer, so it also owns removing the file; a worker
+      // doing it can race the tmp+rename and leave a pre-flush snapshot behind.
+      try { fs.unlinkSync(SNAP); } catch {}
+      for (const w of Object.values(cluster.workers)) w.send({ t: 'flush' });
     } else if (msg.t === 'statsReq') {             // primary wants sibling stats
       const req = { replies: [], expect: Object.keys(cluster.workers).length, from: fromWorker.id, reqId: msg.reqId };
       pendingStats.set(msg.reqId, req);
@@ -2962,6 +3088,8 @@ if (cluster.isPrimary && WORKER_COUNT > 1) {
             if (JSON.stringify(config.blocklists || []) !== prevBl) loadBlocklistFromDisk();
           } catch (e) { console.error('[reload]', e.message); }
         }, 250);
+      } else if (msg.t === 'flush') {
+        cache.clear();
       } else if (msg.t === 'statsGet') {
         process.send({ t: 'statsPart', reqId: msg.reqId, stats: { ...stats, cacheSize: cache.size } });
       } else if (msg.t === 'statsAgg') {
@@ -2998,7 +3126,7 @@ if (cluster.isPrimary && WORKER_COUNT > 1) {
   if (config.dns.host6) {   // '::' = dual-stack listener; false/null disables
     const udp6 = dgram.createSocket({ type: 'udp6', ipv6Only: true, reuseAddr: true });
     udp6.on('message', async (msg, rinfo) => {
-      const out = await handleQuery(msg, { client: rinfo.address, proto: 'udp6' });
+      const out = await answerSafely(msg, { client: rinfo.address, proto: 'udp6' });
       if (out) udp6.send(out, rinfo.port, rinfo.address);
     });
     udp6.on('error', e => {

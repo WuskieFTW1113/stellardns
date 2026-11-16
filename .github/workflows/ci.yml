@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install --omit=dev
+      - name: Syntax check
+        run: node --check server.js
+      # Each suite boots the real resolver on a high port against a fake upstream, so these
+      # test the shipped code rather than a mock. They need no root and no external network.
+      - name: Suites
+        run: |
+          node test/smoke.js
+          node test/fastpath.js
+          node test/sinkhole.js
+      - name: Boot and answer a query
+        run: |
+          cp config.example.json config.json
+          node -e "
+            const fs=require('fs'); const c=JSON.parse(fs.readFileSync('config.json','utf8'));
+            c.dns={host:'127.0.0.1',host6:false,port:5353,tcp:true,ednsUdpSize:1232};
+            c.web={host:'127.0.0.1',port:5380,apiToken:'ci'};
+            c.workers=1; c.dot=false; c.doh=false; c.blockPagePort=8053;
+            c.internalFallback=false;
+            c.categories={steam:{enabled:true,target:'10.0.0.50',target6:'',domains:['steamcontent.com']}};
+            fs.writeFileSync('config.json',JSON.stringify(c,null,2));
+          "
+          node server.js & sleep 5
+          node -e "
+            const dgram=require('dgram'),p=require('dns-packet');
+            const s=dgram.createSocket('udp4');
+            const t=setTimeout(()=>{console.error('TIMEOUT');process.exit(1)},5000);
+            s.once('message',m=>{clearTimeout(t);
+              const r=p.decode(m);
+              const ip=(r.answers||[]).map(a=>a.data).join(',');
+              console.log('rewrite ->',r.rcode,ip);
+              process.exit(r.rcode==='NOERROR'&&ip==='10.0.0.50'?0:1);
+            });
+            s.send(p.encode({type:'query',id:1,flags:p.RECURSION_DESIRED,
+              questions:[{type:'A',name:'lancache.steamcontent.com'}]}),5353,'127.0.0.1');
+          "
+      - name: Console responds
+        run: curl -sf -o /dev/null http://127.0.0.1:5380/

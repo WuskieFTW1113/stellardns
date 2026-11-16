@@ -171,7 +171,7 @@ Every feature discussed is in scope. This table is the build spec: what it is, w
 | DoH bypass mitigation | Firewall + zone config | Block known public DoH endpoints on 443, and serve `use-application-dns.net` as NXDOMAIN so Firefox disables its built-in DoH automatically |
 | Block/NXDOMAIN pages | Layer 1.5 triage, rewrite to local web server | Per-category page, reason carried via EDE; HTTPS categories need an internal CA or fall back to true NXDOMAIN |
 | apt-cacher-ng discovery | Authoritative zone (SRV record), not the rewrite table | `_apt_proxy._tcp.<domain>` SRV record — path-based proxy, not hostname interception; HTTPS mirrors can't be transparently cached at all |
-| Apple content caching discovery | Authoritative zone (TXT record), not the rewrite table | `prs/prn/fss/fsn` TXT record on the client search domain, cloud-mediated handshake — DNS only helps cross-subnet/multi-IP discovery |
+| Apple content caching discovery | Authoritative zone (TXT record), not the rewrite table | `prs`/`fss` TXT record on the client search domain (human-readable IPv4 ranges; `prn`/`fsn` are binary equivalents), cloud-mediated handshake — DNS only helps cross-subnet/multi-IP discovery |
 | Cross-distro support (Debian/Ubuntu/Alpine) | Build/packaging | One static musl binary for all three; systemd unit for Debian/Ubuntu, OpenRC script for Alpine; XDP zero-copy vs generic mode is a deployment choice, not a distro one |
 | Never cache failures (SERVFAIL/timeout) | Layer 2 negative-cache logic | Only NXDOMAIN/NODATA are cacheable per RFC 2308; failures use query coalescing + circuit breaker instead, never a stored cache entry |
 | Adaptive per-upstream RTT/timeout | Layer 2 recursion/forwarding | SRTT/RTTVAR estimation per forwarder (RFC 6298-style), replaces fixed global timeout |
@@ -213,10 +213,10 @@ LANCache-style rewriting works because the cache server sits at the same hostnam
 Apple's content caching discovery is a cloud-mediated handshake (device asks Apple's discovery service, Apple cross-matches against your caching server's registration by public IP), not devices connecting directly to `swcdn.apple.com`-style hostnames that a rewrite could intercept. Where DNS *does* matter is cross-subnet/VLAN discovery and multi-public-IP households:
 
 - <cite index="19-1">If your network uses multiple public IP addresses such that the content cache might register using a different address than a client uses for discovery, you need to provide both the content cache and clients a list of those addresses via a DNS TXT record</cite>, published in the default search domain your clients use.
-- Format: <cite index="20-1">`name._tcp 10800 IN TXT "[prs|prn|fss|fsn]=addressRanges"`</cite> — `prs`/`prn` for public IP ranges, `fss`/`fsn` for favored local IP ranges of your caching servers, so devices prefer your macOS Content Caching VMs over any rogue/neighboring cache.
+- Format: <cite index="20-1">`name._tcp 10800 IN TXT "[prs|prn|fss|fsn]=addressRanges"`</cite> — `prs`/`fss` are human-readable IPv4 ranges (a single address or a start-end pair); `prn`/`fsn` are the same ranges in binary. StellarDNS publishes `prs`/`fss`, so devices prefer your macOS Content Caching VMs over any rogue/neighboring cache.
 - <cite index="18-1">This matters more than it looks like on networks with a NAT pool of multiple outbound public IPs</cite> — worth checking whether your ISP/OPNsense WAN setup rotates or pools addresses, since that's the actual failure mode this record fixes.
 
-**Recommendation:** add this as a static TXT record served from your authoritative zone for the search domain your Macs/iOS devices get via DHCP — not the policy/rewrite table, since it's a discovery hint, not a hostname interception. Set the `fss`/`fsn` values to your Content Caching VMs' local subnet so they're always preferred over anything else on the network.
+**Recommendation:** add this as a static TXT record served from your authoritative zone for the search domain your Macs/iOS devices get via DHCP — not the policy/rewrite table, since it's a discovery hint, not a hostname interception. Set the `fss` value to your Content Caching VMs' local subnet so they're always preferred over anything else on the network.
 
 ## Cross-distro support: Debian, Ubuntu, Alpine
 

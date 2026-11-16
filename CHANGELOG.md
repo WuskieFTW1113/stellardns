@@ -1,5 +1,20 @@
 # StellarDNS — Changelog
 
+## v26.0 — Sirius
+
+**Client hardening.** The DoT pool now clears its in-flight entry and partial frame when a
+query times out, so a reconnect starts clean; a queued query that times out is removed without
+destroying a healthy exchange, and a stalled TLS handshake no longer leaves the pool
+permanently connecting. Cached responses have their TTLs aged by the time spent in the cache
+instead of being returned at their insertion TTL, and truncated responses are not cached. The
+loopback console renders discovered server addresses, versions and imported bundle metadata as
+text rather than HTML, closing an injection path from a malicious LAN server. On Windows,
+closing the window without a tray follows the exit path that restores DNS, a failed restore
+aborts the exit instead of killing the core, and both takeover and restore verify IPv6 as well
+as IPv4. An explicitly configured IPv6 listen address no longer attempts an IPv4 bind first.
+The server API and rules format are unchanged; `APP_VERSION` is 26.0.0 (Sirius) so releases and
+clients agree on the build.
+
 ## v25.0.2 — Vega
 
 **Updating to 25.0.1 removed the Updates view.** The updater replaces exactly two files
@@ -63,9 +78,11 @@ switch, reversible without re-importing.
 **First run asks about DNS, once.** Installing the client does not repoint anything. The first
 launch shows one question - use StellarDNS for this machine? - with the current resolver saved
 before any change, so `restore-dns` and the Options toggle can put it back. On Windows the
-change goes through the UAC prompt and is verified by reading `netsh` back, because a standard
-user cannot set DNS and an exit code is not proof. Declining is remembered; the prompt does
-not return.
+change goes through the UAC prompt and is verified with `Get-DnsClientServerAddress`, because a
+standard user cannot set DNS and an exit code is not proof. It sets the adapter's IPv6 DNS as
+well as IPv4 — a router that advertises its own v6 resolver would otherwise answer first — and
+it refuses to take over at all while the encrypted upstream is unreachable. Declining is
+remembered; the prompt does not return.
 
 **The loopback API refuses other websites.** The client's UI is a local HTTP server, and a page
 that POSTs to `127.0.0.1:5381` supplies the loopback `Host` header itself — so the rebinding

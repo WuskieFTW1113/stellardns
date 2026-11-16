@@ -1,0 +1,16 @@
+{
+  "name": "stellardns-client",
+  "version": "26.0.0",
+  "description": "Encrypted DNS client for StellarDNS — local resolver over DoH/DoT with the same blocklists and rewrites as the server",
+  "bin": { "stellardns-client": "src/cli.js" },
+  "main": "src/proxy.js",
+  "scripts": {
+    "start": "node src/cli.js run",
+    "gui": "node src/cli.js gui",
+    "check": "node --check src/cli.js && node --check src/proxy.js && node --check src/doh.js && node --check src/blocklist.js && node --check src/gui.js && node --check src/sysdns.js && node --check src/config.js"
+  },
+  "keywords": ["dns", "doh", "dot", "adblock", "client", "stellardns"],
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "dependencies": { "dns-packet": "^5.6.1" }
+}

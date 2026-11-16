@@ -1,2 +1,23 @@
-stellardns-install.sh -text
-stellardns-install.sh.sha256 -text
+# Line endings are load-bearing here: server.js and the shell/init scripts are embedded in a
+# tar.gz payload and unpacked on Linux. A CRLF checkout on Windows produces a payload whose
+# install.sh has "\r" on its shebang line, which fails with "bad interpreter". Normalise the
+# index to LF and keep the working tree LF too, so the build never depends on the machine.
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.conf  text eol=lf
+*.openrc text eol=lf
+
+# anything already compressed or binary must never be touched
+*.png   binary
+*.gif   binary
+*.jpg   binary
+*.webp  binary
+*.ico   binary
+*.gz    binary
+*.tgz   binary
+*.zip   binary

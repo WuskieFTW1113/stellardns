@@ -77,6 +77,18 @@ function get(p) {
     req.on('error', reject); req.on('timeout', () => req.destroy(new Error('web timeout')));
   });
 }
+function post(p, body = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: WEB_PORT, path: p, method: 'POST',
+      headers: { 'x-api-token': TOKEN, 'content-type': 'application/json' }, timeout: 4000 }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch { resolve({}); } });
+    });
+    req.on('error', reject); req.on('timeout', () => req.destroy(new Error('web timeout')));
+    req.end(JSON.stringify(body));
+  });
+}
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
 let passed = 0, failed = 0;
@@ -153,6 +165,79 @@ function check(label, cond, extra) {
       }).on('error', reject);
     });
     check('prometheus metrics render', m.includes('stellardns_queries_total'));
+
+    // The console's Flush cache button posts here. Clearing one worker is not a flush when
+    // workers:0 runs one per core, and a restart reloads the snapshot — so this must actually
+    // empty the cache and force the next query upstream.
+    const missesBefore = (await get('/api/stats')).stats.cacheMiss;
+    const flushed = await post('/api/flush');
+    await query(sock, 'host0.example.test');
+    const missesAfter = (await get('/api/stats')).stats.cacheMiss;
+    check('/api/flush empties the cache', flushed.flushed >= 1 && missesAfter === missesBefore + 1,
+      `flushed=${flushed.flushed} misses ${missesBefore} -> ${missesAfter}`);
+
+    // Publish now must make Apple's discovery TXT authoritative immediately, with the short
+    // TTL that lets a changed range reach devices in minutes rather than three hours.
+    const apple = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: '203.0.113.0/24', localRanges: '10.0.0.0/24', apply: true });
+    const recs = await get('/api/localrecords');
+    const appleRec = (Array.isArray(recs) ? recs : []).find(r => r.name === '_aaplcache._tcp.lan' && r.type === 'TXT');
+    const appleAns = await query(sock, '_aaplcache._tcp.lan', 'TXT');
+    const txtData = ((appleAns.answers || [])[0]?.data || []).map(x => Buffer.isBuffer(x) ? x.toString() : String(x)).join('');
+    // Apple's documented human-readable format is single addresses or start-end ranges;
+    // CIDR input is converted, and the stored/effective TTLs still reach devices in minutes.
+    check('Apple discovery TXT is published in Apple range format', apple.applied === true && !!appleRec &&
+      appleRec.ttl === 300 && (appleAns.answers || [])[0]?.ttl <= 300 && !/fss is empty/.test(apple.hint) &&
+      ['prs=203.0.113.0-203.0.113.255', 'fss=10.0.0.0-10.0.0.255'].every(s => txtData.includes(s)),
+      `stored=${appleRec?.ttl} effective=${(appleAns.answers || [])[0]?.ttl} txt=${txtData}`);
+
+    const noFss = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: '203.0.113.0/24' });
+    check('Apple publisher warns when fss is empty', /fss is empty/.test(noFss.hint) && !noFss.records[0].data.includes('fss='),
+      noFss.hint);
+
+    const literal = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: '203.0.113.10', localRanges: '10.0.0.30,10.1.0.30-10.1.0.40' });
+    check('Apple publisher accepts single addresses and start-end ranges', literal.records?.[0]?.data === 'prs=203.0.113.10 fss=10.0.0.30,10.1.0.30-10.1.0.40',
+      literal.records?.[0]?.data);
+
+    // CIDR boundaries: /32 collapses to one address, /31 covers both, host bits are
+    // masked to the network, and the top of the address space stays unsigned.
+    for (const [cidr, expected] of [
+      ['10.0.0.5/32', '10.0.0.5'],
+      ['10.0.0.4/31', '10.0.0.4-10.0.0.5'],
+      ['203.0.113.10/24', '203.0.113.0-203.0.113.255'],
+      ['128.0.0.0/1', '128.0.0.0-255.255.255.255'],
+      ['0.0.0.0/0', '0.0.0.0-255.255.255.255'],
+      ['255.255.255.255/32', '255.255.255.255']
+    ]) {
+      const r = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: cidr, localRanges: '10.0.0.0/24' });
+      check(`Apple CIDR ${cidr} -> ${expected}`, r.records?.[0]?.data?.startsWith(`prs=${expected} `), r.records?.[0]?.data);
+    }
+
+    for (const cidr of ['10.0.0.0/', '10.0.0.0/24/8', '300.1.1.1/24']) {
+      const r = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: cidr, localRanges: '10.0.0.0/24' });
+      check(`Apple CIDR rejects ${cidr}`, /^Malformed Apple cache range: prs=/.test(r.error || ''), r.error);
+    }
+
+    const badPrs = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: '10.0.0.0/33', localRanges: '10.0.0.0/24' });
+    check('Apple publisher rejects a malformed prs range', /^Malformed Apple cache range: prs="10\.0\.0\.0\/33"/.test(badPrs.error || ''),
+      badPrs.error);
+
+    const badFss = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: '203.0.113.0/24', localRanges: '10.0.0.10-10.0.0.1' });
+    check('Apple publisher rejects a reversed fss range', /^Malformed Apple cache range: fss="10\.0\.0\.10-10\.0\.0\.1"/.test(badFss.error || ''),
+      badFss.error);
+
+    // Validation must run before apply: a typo must never replace a working record.
+    const badApply = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: 'not-a-range', localRanges: '10.0.0.0/24', apply: true });
+    const recsAfterBad = await get('/api/localrecords');
+    const keptRec = (Array.isArray(recsAfterBad) ? recsAfterBad : []).find(r => r.name === '_aaplcache._tcp.lan' && r.type === 'TXT');
+    check('Malformed ranges never replace the published record', !!badApply.error && !!keptRec && keptRec.data.includes('prs=203.0.113.0-203.0.113.255'),
+      keptRec?.data);
+
+    const multi = await post('/api/gen/apple-cache', { zone: 'lan', publicRanges: '203.0.113.0/24, 203.0.114.0/24', localRanges: '10.0.0.0/24' });
+    check('Apple publisher normalizes comma-separated ranges', multi.records?.[0]?.data === 'prs=203.0.113.0-203.0.113.255,203.0.114.0-203.0.114.255 fss=10.0.0.0-10.0.0.255',
+      multi.records?.[0]?.data);
+
+    const noRanges = await post('/api/gen/apple-cache', { zone: 'lan' });
+    check('Apple publisher requires at least one range', /at least one public or local range/.test(noRanges.error || ''), noRanges.error);
   } catch (e) {
     failed++;
     console.log('  ERROR ' + e.message);

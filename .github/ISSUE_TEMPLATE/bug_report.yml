@@ -1,0 +1,71 @@
+name: Bug report
+description: A name resolved wrong, the service crashed, or it behaved unlike the docs
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two commands answer most of these before anyone reads the issue:
+
+        ```sh
+        curl -s -H "x-api-token: <token>" 'http://127.0.0.1:5380/api/resolve?name=<name>&type=A'
+        journalctl -u stellardns -n 100
+        ```
+
+        `/api/resolve` shows which stage answered — local record, rewrite, blocklist, cache,
+        upstream — which usually narrows the cause to one component.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `curl -s http://127.0.0.1:5380/api/version`
+      placeholder: '{"name":"stellardns","version":"24.1.0",...}'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is it running?
+      options:
+        - Single-file installer (stellardns-install.sh)
+        - From source (install.sh)
+        - Directly with node server.js
+        - Container or LXC
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      placeholder: |
+        Asked for store.steampowered.com A, got NXDOMAIN.
+        Expected the LANCache address 10.0.0.5.
+    validations:
+      required: true
+
+  - type: textarea
+    id: resolve
+    attributes:
+      label: /api/resolve output
+      description: For any resolution problem. Redact names you do not want public.
+      render: json
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log lines
+      description: The last 30-50 lines around the failure, not the whole journal.
+      render: shell
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >
+        The keys involved. **Remove `apiToken`, passwords, public IPs and any internal
+        hostnames you do not want indexed.**
+      render: json

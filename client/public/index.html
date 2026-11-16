@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StellarDNS Client</title>
+<style>
+  :root{--bg:#070a10;--panel:#0d121c;--line:#1b2433;--ink:#e6ecf6;--ink2:#aab6c8;--dim:#6b7a90;
+    --sig:#4ade80;--amber:#fbbf24;--red:#f87171;--blue:#60a5fa;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(700px 380px at 85% -10%,rgba(96,165,250,.16),transparent 60%),var(--bg);
+    color:var(--ink);font:14.5px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  header{display:flex;align-items:center;gap:10px;padding:15px 20px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:rgba(7,10,16,.9);backdrop-filter:blur(6px);z-index:5}
+  header .m{color:var(--sig);font-size:18px}
+  header b{font-size:15px;letter-spacing:.2px}
+  header small{color:var(--dim);font-family:var(--mono);margin-left:auto;font-size:12px}
+  main{padding:16px 20px 28px;display:grid;gap:14px;max-width:960px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .card .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.7px}
+  .card .v{font-family:var(--mono);font-size:19px;margin-top:3px}
+  .card .v.sig{color:var(--sig)} .card .v.amber{color:var(--amber)} .card .v.blue{color:var(--blue)}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .dns{border-color:#24406b;background:linear-gradient(180deg,#0e1a2c,#0a111c)}
+  .dns h2{color:#cfe0f8}
+  h2{margin:0 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--ink2);
+    display:flex;align-items:center;gap:8px}
+  h2 .tag{font-size:10.5px;letter-spacing:.4px;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--dim);text-transform:none}
+  .desc{color:var(--dim);font-size:12.5px;margin-bottom:10px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  input,select,textarea{background:#070a10;border:1px solid var(--line);color:var(--ink);border-radius:8px;
+    padding:8px 10px;font-family:var(--mono);font-size:13px;outline:none;min-width:0}
+  input:focus,select:focus,textarea:focus{border-color:#2b3a4f}
+  textarea{width:100%;min-height:74px;resize:vertical}
+  button{background:#16202e;border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px 13px;
+    font-size:13px;font-weight:600;cursor:pointer}
+  button:hover{border-color:#2b3a4f}
+  button.primary{background:linear-gradient(180deg,#1f9d55,#15803d);border-color:#1f9d55;color:#eafff2}
+  button.ghost{background:transparent}
+  button:disabled{opacity:.45;cursor:default}
+  .pill{display:inline-block;border-radius:999px;padding:3px 9px;font-size:11.5px;font-family:var(--mono);
+    border:1px solid var(--line)}
+  .pill.on{color:var(--sig);border-color:#1d4b31;background:#0c1a12}
+  .pill.off{color:var(--red);border-color:#3a1a1e;background:#1a0e0f}
+  .muted{color:var(--dim);font-size:12px}
+  .field{display:grid;gap:4px;min-width:120px}
+  .field label{color:var(--dim);font-size:11.5px;text-transform:uppercase;letter-spacing:.6px}
+  .grid-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:8px}
+  .pick{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:9px;
+    padding:9px 11px;margin-top:7px;background:#080d15}
+  .pick .meta{flex:1;min-width:0}
+  .pick .meta b{font-size:13px;display:block}
+  .pick .meta span{color:var(--dim);font-size:11.5px;font-family:var(--mono);word-break:break-all}
+  .list{margin-top:10px}
+  .srv{display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:9px;
+    padding:8px 11px;margin-top:6px;background:#080d15;cursor:pointer}
+  .srv:hover{border-color:#2b3a4f}
+  .srv b{font-family:var(--mono);font-size:13px}
+  .srv span{color:var(--dim);font-size:11.5px;margin-left:auto}
+  pre{margin:10px 0 0;background:#05080d;border:1px solid var(--line);border-radius:8px;padding:10px;
+    font-family:var(--mono);font-size:12px;color:#cfe3ff;white-space:pre-wrap;max-height:150px;overflow:auto}
+  .flash{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);background:#16202e;
+    border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:13px;opacity:0;
+    transition:.18s;pointer-events:none;z-index:20}
+  .flash.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<header>
+  <span class="m">✦</span><b>StellarDNS <span style="color:var(--dim)">Client</span></b>
+  <small id="ver">—</small>
+</header>
+
+<main>
+  <!-- first run only: nothing is applied unless this button is clicked -->
+  <section id="dns_prompt" class="dns" style="display:none">
+    <h2>Use StellarDNS for this machine? <span class="tag">first run</span></h2>
+    <div class="desc">Right now this machine asks its usual resolver. StellarDNS can take that over: it saves the current setting first, answers from the encrypted upstream, and puts the old value back when you turn it off or run restore-dns. Keep the client running while it is in charge — if nothing is listening, nothing answers.</div>
+    <div class="row">
+      <button class="primary" id="dns_yes">Use StellarDNS</button>
+      <button class="ghost" id="dns_no">Not now</button>
+      <span class="muted" id="dns_note"></span>
+    </div>
+  </section>
+
+  <div class="cards" id="cards"></div>
+
+  <!-- ---------------------------------------------------------------- server rules -->
+  <section>
+    <h2>Rules from a server <span class="tag">LAN</span></h2>
+    <div class="desc">Copy rewrites, blocklists and allowlist entries from a StellarDNS server on this network. You choose which pieces to keep, and they are saved on this machine — the server is not consulted again until you import something new.</div>
+    <div class="row">
+      <input id="srv_url" placeholder="http://192.168.1.10:5380" style="flex:1;min-width:190px">
+      <input id="srv_token" type="password" placeholder="API token" style="max-width:180px">
+      <button id="btn_discover" class="ghost">Discover</button>
+      <button id="btn_preview" class="primary">Preview</button>
+    </div>
+    <div class="list" id="servers"></div>
+    <div class="list" id="bundle"></div>
+    <div class="row" id="import_row" style="margin-top:12px;display:none">
+      <button class="primary" id="btn_import">Import selected</button>
+      <span class="muted" id="import_note"></span>
+    </div>
+    <div class="muted" id="imported_from" style="margin-top:10px"></div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- options -->
+  <section>
+    <h2>Options</h2>
+    <div class="desc">These apply on save. Upstream and listen changes need a client restart.</div>
+    <div class="row">
+      <div class="field" style="flex:1;min-width:210px">
+        <label>Encrypted upstream preset</label>
+        <select id="opt_preset">
+          <option value="">Keep current</option>
+          <option value="cloudflare-doh">Cloudflare — DoH</option>
+          <option value="quad9-doh">Quad9 — DoH (filtered)</option>
+          <option value="mullvad-doh">Mullvad — DoH (no logging)</option>
+          <option value="adguard-doh">AdGuard — DoH (filtered)</option>
+          <option value="cloudflare-dot">Cloudflare — DoT</option>
+          <option value="quad9-dot">Quad9 — DoT</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Block response</label>
+        <select id="opt_resp"><option value="nxdomain">NXDOMAIN</option><option value="zeroip">0.0.0.0</option></select>
+      </div>
+      <div class="field">
+        <label>Listen port</label>
+        <input id="opt_port" type="number" min="1" max="65535" style="max-width:110px">
+      </div>
+    </div>
+    <div class="grid-fields">
+      <div class="field"><label>Cache entries</label><input id="opt_cache" type="number" min="100" max="500000"></div>
+      <div class="field"><label>Min TTL (s)</label><input id="opt_ttlmin" type="number" min="1" max="86400"></div>
+      <div class="field"><label>Max TTL (s)</label><input id="opt_ttlmax" type="number" min="1" max="86400"></div>
+    </div>
+    <div class="pick">
+      <input type="checkbox" id="opt_sysdns" style="margin-top:3px">
+      <div class="meta"><b>Manage system DNS</b><span>Point this machine at the client on start and restore the previous setting on exit. Off by default: repointing DNS is a visible change. Needs privileges.</span></div>
+    </div>
+    <div class="pick" style="border-color:#3a2a14;background:#161207">
+      <input type="checkbox" id="opt_rewrites" style="margin-top:3px">
+      <div class="meta"><b>Apply imported rewrites</b><span>Master switch for every imported category. Off keeps the rules saved but resolves names normally — the safe default. Turn this on only if the cache address is reachable from this machine.</span></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="btn_save">Save options</button>
+      <span class="muted" id="save_note"></span>
+    </div>
+    <pre id="ups_out">upstreams</pre>
+  </section>
+
+  <!-- ---------------------------------------------------------------- filtering -->
+  <section>
+    <h2>Filtering</h2>
+    <div class="desc">The lists you imported or added locally. Turning this off forwards everything, still encrypted.</div>
+    <div class="row">
+      <span class="pill off" id="blstate">—</span>
+      <button id="toggle">Toggle blocking</button>
+      <button id="flush">Flush cache</button>
+      <span class="muted" id="blmeta"></span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted" id="rewrite_meta"></span>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- allowlist -->
+  <section>
+    <h2>Allowlist</h2>
+    <div class="desc">One domain per line. These override every list, including imported ones, for the domain and its subdomains.</div>
+    <textarea id="allow" placeholder="ads.example.com"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="btn_allow">Save allowlist</button>
+      <span class="muted" id="allow_note"></span>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- test -->
+  <section>
+    <h2>Test a name</h2>
+    <div class="desc">Runs through this client exactly as an app would: filter, rewrite, cache, then the encrypted upstream.</div>
+    <div class="row">
+      <input id="q" placeholder="example.com" style="flex:1;min-width:150px">
+      <select id="qt"><option>A</option><option>AAAA</option><option>MX</option><option>TXT</option><option>SRV</option><option>HTTPS</option></select>
+      <button class="primary" id="go">Resolve</button>
+    </div>
+    <pre id="out">Ready.</pre>
+  </section>
+</main>
+
+<div class="flash" id="flash"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+let S = null, BUNDLE = null, DNS_DECIDED = false;
+
+const PRESETS = {
+  'cloudflare-doh': [{ name: 'cloudflare', protocol: 'https', hostname: 'cloudflare-dns.com', path: '/dns-query', port: 443 }],
+  'quad9-doh': [{ name: 'quad9', protocol: 'https', hostname: 'dns.quad9.net', path: '/dns-query', port: 443 }],
+  'mullvad-doh': [{ name: 'mullvad', protocol: 'https', hostname: 'dns.mullvad.net', path: '/dns-query', port: 443 }],
+  'adguard-doh': [{ name: 'adguard', protocol: 'https', hostname: 'dns.adguard-dns.com', path: '/dns-query', port: 443 }],
+  'cloudflare-dot': [{ name: 'cloudflare-dot', protocol: 'tls', hostname: 'cloudflare-dns.com', port: 853 }],
+  'quad9-dot': [{ name: 'quad9-dot', protocol: 'tls', hostname: 'dns.quad9.net', port: 853 }]
+};
+
+function flash(m) { const f = $('#flash'); f.textContent = m; f.classList.add('show'); setTimeout(() => f.classList.remove('show'), 2000); }
+async function api(p, o = {}) {
+  const r = await fetch(p, { ...o, headers: { 'Content-Type': 'application/json', ...(o.headers || {}) } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+const fmt = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n ?? 0);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function note(el, msg) { const d = document.createElement('div'); d.className = 'muted'; d.textContent = msg; el.replaceChildren(d); }
+
+async function refresh() {
+  let s;
+  try { s = await api('/api/state'); } catch { setTimeout(refresh, 2000); return; }
+  $('#ver').textContent = 'v' + s.version + ' · ' + s.listening.host + ':' + s.listening.port;
+  const st = s.stats || {};
+  $('#cards').innerHTML = [
+    ['Queries', fmt(st.queries), ''],
+    ['Cache hits', fmt(st.cacheHits), 'sig'],
+    ['Blocked', fmt(st.blocked), 'amber'],
+    ['Rewrites', fmt(s.rewrites), 'blue'],
+    ['Failed', fmt(st.failed), '']
+  ].map(([k, v, c]) => `<div class="card"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`).join('');
+  const on = s.blocking;
+  $('#blstate').textContent = on ? 'blocking on' : 'pass-through';
+  $('#blstate').className = 'pill ' + (on ? 'on' : 'off');
+  $('#blmeta').textContent = (s.blocklist ? s.blocklist.entries : 0) + ' domains · cache ' + (s.cache ? s.cache.entries : 0) + '/' + (s.cache ? s.cache.max : 0);
+  $('#rewrite_meta').textContent = !s.rewrites
+    ? 'no rewrite categories'
+    : (s.rewritesEnabled ? s.rewrites + ' rewrite categories active' : s.rewrites + ' categories saved, rewrites OFF');
+  if (s.importedFrom) {
+    $('#imported_from').textContent = `Imported ${s.importedFrom.categories.length} categories and ${s.importedFrom.lists} lists from ${s.importedFrom.server} on ${new Date(s.importedFrom.at).toLocaleString()}.`;
+  }
+  const prompt = $('#dns_prompt');
+  if (s.dns && s.dns.prompt && !DNS_DECIDED) {
+    prompt.style.display = '';
+    const can = s.dns.canApply !== false;
+    $('#dns_yes').disabled = !can;
+    if (!can) $('#dns_note').textContent = s.dns.why || `Listening on port ${s.dns.listeningOn}; taking over DNS needs port 53.`;
+  } else {
+    prompt.style.display = 'none';
+  }
+  setTimeout(refresh, 3000);
+}
+
+async function loadSettings() {
+  S = await api('/api/settings');
+  $('#opt_resp').value = S.blockResponse;
+  $('#opt_port').value = S.listen.port;
+  $('#opt_cache').value = S.cacheMaxEntries;
+  $('#opt_ttlmin').value = S.ttlMin;
+  $('#opt_ttlmax').value = S.ttlMax;
+  $('#opt_sysdns').checked = S.setSystemDns;
+  $('#opt_rewrites').checked = !!S.rewritesEnabled;
+  $('#allow').value = (S.allowlist || []).join('\n');
+  $('#ups_out').textContent = (S.upstreams || []).map(u => `${u.name}  ${u.protocol}://${u.hostname}${u.path || ''}`).join('\n') || 'none';
+  if (S.importedFrom) {
+    $('#srv_url').value = S.importedFrom.server;
+    $('#imported_from').textContent = `Imported ${S.importedFrom.categories.length} categories and ${S.importedFrom.lists} lists from ${S.importedFrom.server} on ${new Date(S.importedFrom.at).toLocaleString()}.`;
+  }
+}
+
+async function saveSettings() {
+  const preset = $('#opt_preset').value;
+  const body = {
+    blockResponse: $('#opt_resp').value,
+    listen: { port: Number($('#opt_port').value), host: S.listen.host },
+    cacheMaxEntries: Number($('#opt_cache').value),
+    ttlMin: Number($('#opt_ttlmin').value),
+    ttlMax: Number($('#opt_ttlmax').value),
+    setSystemDns: $('#opt_sysdns').checked,
+    rewritesEnabled: $('#opt_rewrites').checked
+  };
+  if (preset && PRESETS[preset]) body.upstreams = PRESETS[preset];
+  try {
+    const r = await api('/api/settings', { method: 'POST', body: JSON.stringify(body) });
+    $('#save_note').textContent = r.restartRequired ? 'saved — restart the client to apply ' + r.changed.join(', ') : 'saved';
+    flash('Options saved');
+    $('#opt_preset').value = '';
+    await loadSettings(); refresh();
+  } catch (e) { flash(e.message); }
+}
+
+async function saveAllowlist() {
+  const allowlist = $('#allow').value.split('\n').map(s => s.trim()).filter(Boolean);
+  try { await api('/api/allowlist', { method: 'POST', body: JSON.stringify({ allowlist }) }); $('#allow_note').textContent = 'saved ' + allowlist.length; flash('Allowlist saved'); }
+  catch (e) { flash(e.message); }
+}
+
+async function discover() {
+  const box = $('#servers');
+  $('#btn_discover').disabled = true; note(box, 'scanning this network…');
+  try {
+    const r = await api('/api/rules/discover', { method: 'POST', body: '{}' });
+    if (!r.servers.length) {
+      note(box, 'no StellarDNS server answered on this network. Enter the address by hand.');
+    } else {
+      box.replaceChildren(...r.servers.map(s => {
+        const d = document.createElement('div');
+        d.className = 'srv';
+        d.addEventListener('click', () => pickServer(s.url, s.version));
+        const b = document.createElement('b'); b.textContent = s.url;
+        const span = document.createElement('span');
+        span.textContent = 'v' + s.version + (s.rulesAvailable === false ? ' · rules need v25' : '');
+        d.append(b, span);
+        return d;
+      }));
+    }
+  } catch (e) { note(box, e.message); }
+  $('#btn_discover').disabled = false;
+}
+
+function pickServer(url, version) {
+  $('#srv_url').value = url;
+  flash('Selected ' + url + ' (v' + version + ')');
+}
+
+async function preview() {
+  const url = $('#srv_url').value.trim(), token = $('#srv_token').value;
+  if (!url) return flash('Enter a server address');
+  $('#btn_preview').disabled = true; $('#bundle').innerHTML = '<div class="muted">reading rules…</div>';
+  try {
+    BUNDLE = await api('/api/rules/preview', { method: 'POST', body: JSON.stringify({ url, token }) });
+    renderBundle();
+  } catch (e) { note($('#bundle'), e.message); $('#import_row').style.display = 'none'; }
+  $('#btn_preview').disabled = false;
+}
+
+function renderBundle() {
+  const b = BUNDLE;
+  const cats = Object.entries(b.categories || {});
+  const lists = b.blocklists || [];
+  const count = v => esc(v ?? 0);
+  $('#bundle').innerHTML =
+    `<div class="muted" style="margin-top:10px">${count(b.counts && b.counts.domains)} domains in ${cats.length} categories · ${lists.length} lists · ${count(b.counts && b.counts.allowlist)} allowlist entries</div>` +
+    cats.map(([name, raw]) => {
+      const c = raw || {};
+      return `<label class="pick"><input type="checkbox" class="pick-cat" value="${esc(name)}">
+      <div class="meta"><b>${esc(name)}</b><span>${esc((c.domains || []).length)} domains → ${esc(c.target || 'no target')}${c.target6 ? ' / ' + esc(c.target6) : ''}</span></div></label>`;
+    }).join('') +
+    lists.map(l => `<label class="pick"><input type="checkbox" class="pick-list" value="${esc(l.url)}">
+      <div class="meta"><b>${esc(l.name)}</b><span>${esc(l.url)}</span></div></label>`).join('') +
+    `<label class="pick"><input type="checkbox" id="pick_allow">
+      <div class="meta"><b>Allowlist</b><span>${count(b.counts && b.counts.allowlist)} domains exempt from blocking</span></div></label>` +
+    `<label class="pick" style="border-color:#3a2a14;background:#161207"><input type="checkbox" id="pick_rewrites">
+      <div class="meta"><b>Apply these rewrites on this machine</b><span>Points launcher names at the imported cache address, subdomains included. If that address is not reachable, downloads and some games will fail — leave it off unless you run the cache.</span></div></label>`;
+  $('#import_row').style.display = '';
+  updateImportNote();
+  $$('.pick-cat, .pick-list, #pick_allow, #pick_rewrites').forEach(el => el.addEventListener('change', updateImportNote));
+}
+
+function selection() {
+  return {
+    categories: $$('.pick-cat:checked').map(e => e.value),
+    blocklists: $$('.pick-list:checked').map(e => e.value),
+    allowlist: $('#pick_allow') && $('#pick_allow').checked,
+    applyRewrites: !!($('#pick_rewrites') && $('#pick_rewrites').checked)
+  };
+}
+function updateImportNote() {
+  const s = selection();
+  $('#import_note').textContent = `${s.categories.length} categories, ${s.blocklists.length} lists${s.allowlist ? ', allowlist' : ''} — rewrites ${s.applyRewrites ? 'ON' : 'saved but off'}`;
+}
+
+async function importRules() {
+  if (!BUNDLE) return;
+  try {
+    const r = await api('/api/rules/import', {
+      method: 'POST',
+      body: JSON.stringify({ url: $('#srv_url').value.trim(), token: $('#srv_token').value, selection: selection() })
+    });
+    flash(`Imported ${r.categories.length} categories and ${r.blocklists} lists`);
+    await loadSettings(); refresh();
+  } catch (e) { flash(e.message); }
+}
+
+$('#toggle').onclick = async () => { const s = await api('/api/state'); await api('/api/toggle', { method: 'POST', body: JSON.stringify({ blocking: !s.blocking }) }); refresh(); };
+$('#flush').onclick = async () => { const r = await api('/api/flush', { method: 'POST' }); $('#out').textContent = 'flushed ' + r.flushed + ' cached answers'; };
+$('#go').onclick = async () => {
+  const name = $('#q').value.trim(); if (!name) return;
+  $('#out').textContent = 'resolving…';
+  try {
+    const r = await api('/api/test?name=' + encodeURIComponent(name) + '&type=' + $('#qt').value);
+    if (r.error) { $('#out').textContent = r.error; return; }
+    const rows = (r.answers || []).map(a => `${a.type}  ${a.ttl}s  ${typeof a.data === 'object' ? JSON.stringify(a.data) : a.data}`);
+    $('#out').textContent = `${r.rcode} · ${r.ms}ms\n` + (rows.join('\n') || '(no answers)');
+  } catch (e) { $('#out').textContent = 'request failed: ' + e.message; }
+};
+$('#q').addEventListener('keydown', e => { if (e.key === 'Enter') $('#go').click(); });
+$('#dns_yes').onclick = async () => {
+  const b = $('#dns_yes');
+  b.disabled = true;
+  $('#dns_note').textContent = 'waiting for permission…';
+  try {
+    const r = await api('/api/dns/apply', { method: 'POST', body: '{}' });
+    DNS_DECIDED = true;
+    $('#dns_prompt').style.display = 'none';
+    flash(r.elevated ? 'System DNS now points at StellarDNS (approved)' : 'System DNS now points at StellarDNS');
+    await loadSettings();
+  } catch (e) { $('#dns_note').textContent = e.message; }
+  b.disabled = false;
+};
+$('#dns_no').onclick = async () => {
+  DNS_DECIDED = true;
+  $('#dns_prompt').style.display = 'none';
+  try { await api('/api/dns/dismiss', { method: 'POST', body: '{}' }); } catch {}
+  flash('Left DNS alone — change it later in Options');
+};
+$('#btn_save').onclick = saveSettings;
+$('#btn_allow').onclick = saveAllowlist;
+$('#btn_discover').onclick = discover;
+$('#btn_preview').onclick = preview;
+$('#btn_import').onclick = importRules;
+
+(async () => { await loadSettings(); refresh(); })();
+</script>
+</body>
+</html>
