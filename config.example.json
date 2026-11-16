@@ -41,6 +41,7 @@
     "minTtl": 5,
     "maxTtl": 86400,
     "negMaxTtl": 900,
+    "clientTtlFloor": 0,
     "serveStale": true,
     "serveStaleMaxAge": 259200,
     "prefetch": true,

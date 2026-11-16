@@ -54,6 +54,9 @@ const DEFAULT_CONFIG = {
     minTtl: 5,
     maxTtl: 86400,
     negMaxTtl: 900,               // cap for NXDOMAIN/NODATA (RFC 2308 negatives ONLY)
+    clientTtlFloor: 0,            // opt-in: minimum TTL returned to clients; 0 = off. A 0s
+                                  // TTL makes stubs re-resolve on every connection and can move
+                                  // a download to another CDN edge mid-transfer
     serveStale: true,
     serveStaleMaxAge: 86400 * 3,  // how stale is acceptable during outage
     prefetch: true,
@@ -1860,8 +1863,16 @@ function buildAnswers(entry, stale) {
   const left = Math.max(0, Math.floor((entry.expiresAt - Date.now()) / 1000));
   // RFC 8767: a stale answer must not look fresh, or it re-pins the dead address in the
   // client for a full TTL after the upstream has recovered. 30s lets it retry and move on.
-  const cap = stale ? 30 : left;
-  return entry.answers.map(a => ({ ...a, ttl: Math.min(typeof a.ttl === 'number' ? a.ttl : 30, cap) }));
+  // Fresh hits keep a small floor too: returning a 0/1s TTL for an entry that is about to
+  // expire makes stubs re-resolve during a download, and a new answer can put them on a
+  // different CDN edge mid-transfer. The floor only extends the client's cache, not ours.
+  const floor = Math.max(0, Number(config.cache.clientTtlFloor) || 0);
+  const cap = stale ? 30 : Math.max(left, floor);
+  return entry.answers.map(a => {
+    const original = typeof a.ttl === 'number' ? a.ttl : 30;
+    const ttl = stale ? Math.min(original, cap) : Math.max(floor, Math.min(original, cap));
+    return { ...a, ttl };
+  });
 }
 
 async function handleQuery(msg, meta) {
@@ -2262,7 +2273,7 @@ function saveConfig(opts) {
   if (!opts.noBroadcast && !_savingConfig && global.__sdBroadcastReload) global.__sdBroadcastReload();
 }
 
-const APP_VERSION = '26.0.0';
+const APP_VERSION = '26.0.1';
 const APP_CODENAME = 'Sirius';
 
 // ---------------------------------------------------------------- self-update

@@ -1,6 +1,6 @@
 # StellarDNS
 
-![version](https://img.shields.io/badge/version-26.0.0-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
+![version](https://img.shields.io/badge/version-26.0.1-ff5c35) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%E2%89%A518-informational) ![CI](https://github.com/WuskieFTW1113/stellardns/actions/workflows/ci.yml/badge.svg)
 
 A fast, gaming-oriented DNS resolver with a web console, built for homelabs.
 

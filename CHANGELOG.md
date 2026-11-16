@@ -1,5 +1,14 @@
 # StellarDNS — Changelog
 
+## v26.0.1 — Sirius patch
+
+**Opt-in client TTL floor.** v26.0.0 aged cached answers to their remaining lifetime, which
+could return a 0/1s TTL for an entry about to expire. A downloader that re-resolves on new
+connections can then move to another CDN edge mid-transfer. `cache.clientTtlFloor` is now
+available, disabled by default (`0`); when set, fresh cache hits are returned with at least
+that many seconds while stale answers keep their 30-second cap. The installer and
+`APP_VERSION` are 26.0.1; the Windows client is unchanged at 26.0.0.
+
 ## v26.0 — Sirius
 
 **Client hardening.** The DoT pool now clears its in-flight entry and partial frame when a

@@ -48,6 +48,10 @@ function fakeUpstream(port, delayMs) {
     if (name === 'dup.test') {
       answers.push({ name, type: 'A', ttl: 60, data: '5.5.5.5' });
       answers.push({ name, type: 'A', ttl: 60, data: '5.5.5.5' });   // exact duplicate
+    } else if (name === 'short.test') {
+      answers.push({ name, type: 'A', ttl: 2, data: '6.6.6.6' });
+    } else if (name === 'floored.test') {
+      answers.push({ name, type: 'A', ttl: 3, data: '7.7.7.7' });
     } else {
       answers.push({ name, type: 'A', ttl: 60, data: '9.9.9.9' });
     }
@@ -70,6 +74,13 @@ const get = (p) => new Promise((resolve, reject) => {
   const req = require('http').request({ host: '127.0.0.1', port: WEB_PORT, path: p, headers: { 'x-api-token': TOKEN } },
     res => { let b = ''; res.on('data', c => b += c); res.on('end', () => { try { resolve(JSON.parse(b)); } catch (e) { reject(e); } }); });
   req.on('error', reject); req.end();
+});
+
+const post = (p, body = {}) => new Promise((resolve, reject) => {
+  const req = require('http').request({ host: '127.0.0.1', port: WEB_PORT, path: p, method: 'POST',
+    headers: { 'x-api-token': TOKEN, 'content-type': 'application/json' } },
+    res => { let b = ''; res.on('data', c => b += c); res.on('end', () => { try { resolve(JSON.parse(b)); } catch (e) { reject(e); } }); });
+  req.on('error', reject); req.end(JSON.stringify(body));
 });
 
 async function main() {
@@ -119,8 +130,25 @@ async function main() {
   const t2 = (aged.answers || [])[0]?.ttl;
   check('cached TTL counts down', typeof t1 === 'number' && typeof t2 === 'number' && t2 < t1, `${t1}s -> ${t2}s`);
 
+  // 5) The floor is opt-in: with the default 0, a short upstream answer must still age.
+  await get('/api/resolve?name=short.test&type=A');
+  await new Promise(r => setTimeout(r, 1100));
+  const shortDefault = await get('/api/resolve?name=short.test&type=A');
+  const shortDefaultTtl = (shortDefault.answers || [])[0]?.ttl;
+  check('short TTL is unchanged by default', typeof shortDefaultTtl === 'number' && shortDefaultTtl <= 2, `${shortDefaultTtl}s`);
+
+  // 6) Enable the floor through the same settings API the console uses, then a fresh short
+  //    answer must not be returned as a 0/1s TTL.
+  const enabled = await post('/api/settings', { cache: { clientTtlFloor: 30 } });
+  check('client TTL floor can be enabled', enabled.ok === true, JSON.stringify(enabled));
+  await get('/api/resolve?name=floored.test&type=A');
+  await new Promise(r => setTimeout(r, 1100));
+  const floored = await get('/api/resolve?name=floored.test&type=A');
+  const flooredTtl = (floored.answers || [])[0]?.ttl;
+  check('enabled floor raises short TTL', typeof flooredTtl === 'number' && flooredTtl >= 30, `${flooredTtl}s`);
+
   cleanup();
-  console.log(`\n  ${4 - fails} passed, ${fails} failed`);
+  console.log(`\n  ${6 - fails} passed, ${fails} failed`);
   fs.rmSync(DATA, { recursive: true, force: true });
   process.exit(fails ? 1 : 0);
 }
